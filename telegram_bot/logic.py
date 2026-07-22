@@ -61,16 +61,26 @@ class KillPickEngine:
                                 away_odds: float) -> Dict[str, float]:
         """
         배당률 → 무배당 확률 (vig 제거)
+        2-way market (야구/농구/테니스): draw_odds = 0 or None
         """
         raw_home = 1 / home_odds
-        raw_draw = 1 / draw_odds
         raw_away = 1 / away_odds
         
-        total = raw_home + raw_draw + raw_away
+        # 3-way market (축구 등)
+        if draw_odds and draw_odds > 0:
+            raw_draw = 1 / draw_odds
+            total = raw_home + raw_draw + raw_away
+            return {
+                'home': raw_home / total,
+                'draw': raw_draw / total,
+                'away': raw_away / total
+            }
         
+        # 2-way market (야구/농구/테니스 등)
+        total = raw_home + raw_away
         return {
             'home': raw_home / total,
-            'draw': raw_draw / total,
+            'draw': 0.0,
             'away': raw_away / total
         }
     
@@ -118,9 +128,12 @@ class KillPickEngine:
         # 3. 각 결과별 분석
         outcomes = {
             'home': {'odds': home_odds, 'name_kr': '홈승', 'xg': home_xg},
-            'draw': {'odds': draw_odds, 'name_kr': '무승부', 'xg': 0},
             'away': {'odds': away_odds, 'name_kr': '원정승', 'xg': away_xg}
         }
+        
+        # 3-way market only if draw_odds exists and > 0
+        if draw_odds and draw_odds > 0:
+            outcomes['draw'] = {'odds': draw_odds, 'name_kr': '무승부', 'xg': 0}
         
         picks = []
         for key, info in outcomes.items():
