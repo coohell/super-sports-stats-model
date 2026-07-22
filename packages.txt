@@ -1,2 +1,1 @@
-# Streamlit Cloud 한국어 폰트 지원
 fonts-noto-cjk
