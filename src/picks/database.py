@@ -3,12 +3,13 @@
 경기, 픽, 결과, 승률 추적
 """
 import sqlite3
+import os
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Optional
 import json
 
-DB_PATH = "/root/.openclaw/workspace/super-sports-stats-model/db/superpicks.db"
+DB_PATH = os.environ.get("DB_PATH", "/tmp/superpicks.db")
 
 @dataclass
 class MatchPick:
@@ -45,6 +46,7 @@ class PickDatabase:
         self.init_db()
     
     def init_db(self):
+        os.makedirs(os.path.dirname(self.db_path) or "/tmp", exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
