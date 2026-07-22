@@ -1,89 +1,79 @@
 import streamlit as st
 import sys
 from pathlib import Path
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "telegram_bot"))
 from logic import KillPickEngine
 
-st.set_page_config(page_title="상세 분석", page_icon="📊", layout="wide")
+from data import get_today_matches
 
-st.title("📊 상세 경기 분석")
-st.caption("다중 경기 비교 분석")
+st.set_page_config(page_title="일괄 분석", page_icon="📊", layout="wide")
+
+st.markdown("""
+<style>
+.stApp { background: #0f0f1a; color: #e0e0e0; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📊 일괄 필살승부 분석")
+st.caption("여러 경기를 한 번에 비교 분석")
 
 engine = KillPickEngine()
 
-st.info("""
-이 페이지에서는 여러 경기를 한 번에 입력하여 비교 분석할 수 있습니다.
-각 줄에 `홈팀,원정팀,홈배당,무배당,원정배당` 형식으로 입력하세요.
-""")
-
+# 텍스트 영역
 input_text = st.text_area(
-    "경기 목록 입력",
-    height=200,
-    placeholder="""한국,체코,2.10,3.30,3.60
-맨시티,아스날,1.85,3.50,4.20
-리버풀,첼시,2.05,3.40,3.80"""
+    "경기 목록 (CSV 형식)",
+    height=150,
+    placeholder="""홈팀,원정팀,홈배당,무배당,원정배당
+한국,체코,2.10,3.30,3.60
+맨시티,아스날,1.85,3.50,4.20"""
 )
 
-if st.button("🔍 전체 분석", type="primary"):
-    lines = [l.strip() for l in input_text.strip().split('\n') if l.strip()]
+# 또는 오늘 경기 자동 로드
+if st.button("📅 오늘 경기 전체 분석", type="primary", use_container_width=True):
+    matches = get_today_matches()
+    input_text = "\n".join([f"{m.home},{m.away},{m.home_odds},{m.draw_odds or 3.0},{m.away_odds}" for m in matches[:20]])
+    st.text_area("자동 로드된 경기", input_text, height=150, disabled=True)
+
+if st.button("🔍 분석 실행", type="secondary", use_container_width=True) and input_text.strip():
+    lines = [l.strip() for l in input_text.strip().split('\n') if l.strip() and not l.startswith('홈')]
     
-    if not lines:
-        st.error("경기 데이터를 입력해주세요!")
+    results = []
+    progress = st.progress(0)
+    
+    for i, line in enumerate(lines):
+        try:
+            parts = line.split(',')
+            if len(parts) >= 4:
+                home, away = parts[0], parts[1]
+                ho, do, ao = float(parts[2]), float(parts[3]), float(parts[4]) if len(parts) > 4 else 3.0
+                pick = engine.find_kill_pick(home, away, ho, do, ao)
+                results.append({
+                    '경기': pick.match,
+                    '추천': pick.selection_kr,
+                    '배당률': pick.odds,
+                    '모델확률': f"{pick.model_prob*100:.1f}%",
+                    '엣지': f"{pick.edge*100:+.1f}%p",
+                    'EV': f"{pick.expected_value*100:+.1f}%",
+                    '신뢰도': pick.confidence,
+                })
+        except Exception as e:
+            pass
+        progress.progress((i + 1) / len(lines))
+    
+    if results:
+        df = pd.DataFrame(results)
+        # 엣지 기준 정렬을 위해 숫자 변환
+        df['엣지_숫자'] = df['엣지'].str.replace('%p', '').str.replace('+', '').astype(float)
+        df = df.sort_values('엣리_숫자', ascending=False).drop('엣지_숫자', axis=1)
+        
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # TOP 3
+        st.subheader("🏆 필살승부 TOP 3")
+        for idx, row in df.head(3).iterrows():
+            emoji = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉"
+            st.success(f"{emoji} **{row['경기']}** → **{row['추천']}** @ {row['배당률']} | {row['신뢰도']}")
     else:
-        results = []
-        progress = st.progress(0)
-        
-        for i, line in enumerate(lines):
-            try:
-                parts = line.split(',')
-                if len(parts) == 5:
-                    pick = engine.find_kill_pick(
-                        parts[0], parts[1],
-                        float(parts[2]), float(parts[3]), float(parts[4])
-                    )
-                    results.append({
-                        'match': pick.match,
-                        'pick': pick.selection_kr,
-                        'odds': pick.odds,
-                        'model_prob': pick.model_prob,
-                        'implied_prob': pick.implied_prob,
-                        'edge': pick.edge,
-                        'ev': pick.expected_value,
-                        'confidence': pick.confidence,
-                        'kelly': pick.kelly_fraction
-                    })
-            except Exception as e:
-                st.error(f"라인 {i+1} 오류: {e}")
-            
-            progress.progress((i + 1) / len(lines))
-        
-        if results:
-            st.divider()
-            st.subheader(f"📈 분석 결과 ({len(results)}경기)")
-            
-            # 데이터프레임으로 표시
-            import pandas as pd
-            df = pd.DataFrame(results)
-            
-            # 컬럼명 한글화
-            df.columns = ['경기', '추천', '배당률', '모델확률', '암시확률', '엣지', 'EV', '신뢰도', 'Kelly']
-            
-            # 엣지 기준 정렬
-            df = df.sort_values('엣지', ascending=False)
-            
-            st.dataframe(
-                df.style.background_gradient(subset=['엣지', 'EV'], cmap='RdYlGn'),
-                use_container_width=True
-            )
-            
-            # 필살승부 TOP 3
-            st.subheader("🏆 필살승부 TOP 3")
-            top3 = df.head(3)
-            
-            for idx, row in top3.iterrows():
-                emoji = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉"
-                st.success(f"""
-                {emoji} **{row['경기']}** → **{row['추천']}** @ {row['배당률']}  
-                엣지: {row['엣지']*100:+.1f}%p | EV: {row['EV']*100:+.1f}% | {row['신뢰도']}
-                """)
+        st.error("분석할 수 있는 경기가 없습니다.")
