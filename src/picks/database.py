@@ -235,6 +235,44 @@ class PickDatabase:
             'roi': roi
         }
     
+    def add_pick(self, pick_data: dict) -> int:
+        """픽 추가 (dict 입력용 래퍼)"""
+        mp = MatchPick(
+            id=None,
+            date=pick_data.get('date', ''),
+            sport=pick_data.get('sport', ''),
+            league=pick_data.get('league', ''),
+            match_time=pick_data.get('match_time', ''),
+            home_team=pick_data.get('home_team', ''),
+            away_team=pick_data.get('away_team', ''),
+            home_odds=pick_data.get('home_odds', 0.0),
+            draw_odds=pick_data.get('draw_odds', 0.0),
+            away_odds=pick_data.get('away_odds', 0.0),
+            pick_selection=pick_data.get('pick', ''),
+            pick_odds=pick_data.get('odds', 0.0),
+            confidence=pick_data.get('confidence', ''),
+            reasoning=pick_data.get('reason', ''),
+            kelly_fraction=0.0,
+            ev=0.0,
+            edge=0.0,
+            roster_analysis='',
+            recent_form='',
+            environment='',
+            status='pending'
+        )
+        return self.save_pick(mp)
+    
+    def add_combo(self, combo_data: dict) -> int:
+        """조합 추가 (dict 입력용 래퍼)"""
+        self.save_daily_combo(
+            date=combo_data.get('date', ''),
+            sport='mixed',
+            pick_ids=json.loads(combo_data.get('picks', '[]')),
+            combo_odds=combo_data.get('total_odds', 0.0),
+            confidence='pending'
+        )
+        return 0
+
     def _rows_to_picks(self, rows) -> List[MatchPick]:
         picks = []
         for row in rows:
