@@ -14,6 +14,51 @@ API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "")
 
 
+def fetch_api_football(date: str = None) -> List[Dict]:
+    """API-Football에서 실제 축구 경기 수집"""
+    if not API_FOOTBALL_KEY:
+        return []
+    
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    
+    url = "https://v3.football.api-sports.io/fixtures"
+    headers = {'x-apisports-key': API_FOOTBALL_KEY}
+    params = {'date': date}
+    
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        data = resp.json().get('response', [])
+        matches = []
+        
+        for game in data[:10]:
+            fixture = game.get('fixture', {})
+            teams = game.get('teams', {})
+            league = game.get('league', {})
+            
+            matches.append({
+                'match_id': f"fb_{fixture.get('id', '')}",
+                'date': date,
+                'sport': '축구',
+                'league': league.get('name', ''),
+                'match_time': fixture.get('date', ''),
+                'home_team': teams.get('home', {}).get('name', ''),
+                'away_team': teams.get('away', {}).get('name', ''),
+                'home_odds': 0,
+                'draw_odds': 0,
+                'away_odds': 0,
+                'home_xg': 1.5,
+                'away_xg': 1.2,
+                'home_strength': 0.5,
+                'away_strength': 0.5
+            })
+        
+        return matches
+    except Exception as e:
+        print(f"⚠️ API-Football 오류: {e}")
+        return []
+
+
 def fetch_theodds_api(sport: str = "soccer", region: str = "eu") -> List[Dict]:
     """TheOddsAPI에서 실시간 배당 수집"""
     if not THE_ODDS_API_KEY:
@@ -122,12 +167,32 @@ def get_mock_matches() -> List[Dict]:
 
 def get_all_matches() -> List[Dict]:
     """모든 경기 데이터 반환 (API 우선, 실패 시 모의 데이터)"""
-    # 실제 API 데이터 우선 시도
-    real_matches = fetch_theodds_api("soccer", "eu")
+    # 1. TheOddsAPI 실시간 배당 (축구 우선)
+    odds_matches = fetch_theodds_api("soccer", "eu")
     
-    if real_matches:
-        print(f"   → TheOddsAPI 실시간 데이터 {len(real_matches)}개 로드")
-        return real_matches
+    # 2. API-Football 축구 경기 정보
+    fb_matches = fetch_api_football()
+    
+    # 3. 두 API 합치기 (odds 우선, football로 보완)
+    all_matches = []
+    fb_lookup = {f"{m['home_team']}_{m['away_team']}": m for m in fb_matches}
+    
+    for om in odds_matches:
+        key = f"{om['home_team']}_{om['away_team']}"
+        if key in fb_lookup:
+            # API-Football 정보로 보완
+            fm = fb_lookup[key]
+            om['league'] = fm['league'] or om['league']
+            om['match_time'] = fm['match_time'] or om['match_time']
+            del fb_lookup[key]
+        all_matches.append(om)
+    
+    # 남은 API-Football 경기도 추가
+    all_matches.extend(fb_lookup.values())
+    
+    if all_matches:
+        print(f"   → 실시간 API 데이터 {len(all_matches)}개 로드 (TheOddsAPI + API-Football)")
+        return all_matches
     
     print("   → API 실패, 모의 데이터 사용")
     return get_mock_matches()
