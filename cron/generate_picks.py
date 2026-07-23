@@ -12,6 +12,16 @@ import sys
 import json
 from datetime import datetime, timedelta
 
+# .env 로드
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print("   → .env 파일 로드 완료")
+except ImportError:
+    pass
+
 # 경로 설정
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -65,7 +75,7 @@ def generate_world_class_picks():
     
     # 픽 생성
     print("\n🧠 AI 분석 중...")
-    picks = engine.generate_picks(matches, min_ev=0.0, top_n=5)
+    picks = engine.generate_picks(matches, min_ev=-5.0, top_n=5)
     
     if not picks:
         print("⚠️ 적합한 픽이 없습니다. (EV 기준 미달)")

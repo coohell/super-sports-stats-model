@@ -7,13 +7,77 @@ import os
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict
+import requests
 
 # 환경 변수
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "")
 
+
+def fetch_theodds_api(sport: str = "soccer", region: str = "eu") -> List[Dict]:
+    """TheOddsAPI에서 실시간 배당 수집"""
+    if not THE_ODDS_API_KEY:
+        return []
+    
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
+    params = {
+        'apiKey': THE_ODDS_API_KEY,
+        'regions': region,
+        'markets': 'h2h',
+        'oddsFormat': 'decimal'
+    }
+    
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        data = resp.json()
+        matches = []
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        for game in data[:10]:
+            match_time = game.get('commence_time', '')
+            home = game.get('home_team', '')
+            away = game.get('away_team', '')
+            
+            # 배당률 추출
+            odds = game.get('bookmakers', [{}])[0].get('markets', [{}])[0].get('outcomes', [])
+            home_odds = draw_odds = away_odds = 0
+            
+            for o in odds:
+                name = o.get('name', '')
+                price = o.get('price', 0)
+                if name == home:
+                    home_odds = price
+                elif name == away:
+                    away_odds = price
+                elif name in ['Draw', '무승부']:
+                    draw_odds = price
+            
+            if home_odds > 0 and away_odds > 0:
+                matches.append({
+                    'match_id': f"odds_{game.get('id', '')}",
+                    'date': today,
+                    'sport': '축구' if sport == 'soccer' else sport,
+                    'league': game.get('sport_title', ''),
+                    'match_time': match_time,
+                    'home_team': home,
+                    'away_team': away,
+                    'home_odds': home_odds,
+                    'draw_odds': draw_odds or 0,
+                    'away_odds': away_odds,
+                    'home_xg': 1.5,
+                    'away_xg': 1.2,
+                    'home_strength': 0.5,
+                    'away_strength': 0.5
+                })
+        
+        return matches
+    except Exception as e:
+        print(f"⚠️ TheOddsAPI 오류: {e}")
+        return []
+
+
 def get_mock_matches() -> List[Dict]:
-    """테스트용 모의 경기 데이터"""
+    """테스트용 모의 경기 데이터 (API 실패 시 폴백)"""""
     today = datetime.now().strftime("%Y-%m-%d")
     
     matches = [
@@ -57,11 +121,15 @@ def get_mock_matches() -> List[Dict]:
     return matches
 
 def get_all_matches() -> List[Dict]:
-    """모든 경기 데이터 반환 (API 연동 준비 + 모의 데이터 폴백)"""
-    # TODO: API 연동 시 실제 데이터 우선 사용
-    # if API_FOOTBALL_KEY or THE_ODDS_API_KEY:
-    #     return fetch_api_matches()
+    """모든 경기 데이터 반환 (API 우선, 실패 시 모의 데이터)"""
+    # 실제 API 데이터 우선 시도
+    real_matches = fetch_theodds_api("soccer", "eu")
     
+    if real_matches:
+        print(f"   → TheOddsAPI 실시간 데이터 {len(real_matches)}개 로드")
+        return real_matches
+    
+    print("   → API 실패, 모의 데이터 사용")
     return get_mock_matches()
 
 def get_matches_by_sport(sport: str) -> List[Dict]:
