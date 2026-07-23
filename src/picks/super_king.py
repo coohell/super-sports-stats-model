@@ -21,6 +21,8 @@ from src.picks.database import PickDatabase, MatchPick
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
+ALIYUN_KEY = os.getenv("ALIYUN_API_KEY", "")
+ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "")
 
 @dataclass
 class LiveMatch:
@@ -136,10 +138,56 @@ class SuperPickKing:
     # ===== LLM 심층 분석 =====
     
     def llm_analyze(self, match: LiveMatch) -> Dict:
-        """LLM으로 경기 심층 분석"""
-        if not OPENAI_KEY:
+        """LLM으로 경기 심층 분석 (Aliyun/OpenAI 자동 전환)"""
+        # 우선순위: Aliyun → OpenAI → Mock
+        if ALIYUN_KEY and ALIYUN_BASE_URL:
+            return self._aliyun_analyze(match)
+        elif OPENAI_KEY:
+            return self._openai_analyze(match)
+        else:
             return self._mock_llm_analysis(match)
-        
+    
+    def _aliyun_analyze(self, match: LiveMatch) -> Dict:
+        """Aliyun (Qwen) API로 분석"""
+        try:
+            import openai
+            client = openai.OpenAI(
+                api_key=ALIYUN_KEY,
+                base_url=ALIYUN_BASE_URL
+            )
+            
+            model = os.getenv("ALIYUN_MODEL", "qwen-plus")
+            
+            prompt = f"""당신은 스포츠 분석 전문가입니다. 다음 경기를 분석해주세요:
+
+경기: {match.home} vs {match.away}
+리그: {match.league}
+배당률: 홈 {match.home_odds} / 무 {match.draw_odds} / 원정 {match.away_odds}
+
+다음 형식으로 한국어로 답변해주세요:
+1. 로스터 분석 (주요 선수, 부상자, 결장자)
+2. 최근 5경기 형태
+3. 홈/원정 성적 및 전력 비교
+4. 날씨 및 환경 요인
+5. 최종 예측 (홈승/무/원정승 + 신뢰도 0-100%)
+
+각 항목을 간결하게 2-3문장으로 작성하세요."""
+            
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1500,
+                temperature=0.7
+            )
+            
+            content = resp.choices[0].message.content
+            return self._parse_llm_response(content)
+        except Exception as e:
+            print(f"❌ Aliyun API 오류: {e}")
+            return self._mock_llm_analysis(match)
+    
+    def _openai_analyze(self, match: LiveMatch) -> Dict:
+        """OpenAI API로 분석"""
         try:
             import openai
             client = openai.OpenAI(api_key=OPENAI_KEY)
@@ -168,7 +216,7 @@ class SuperPickKing:
             content = resp.choices[0].message.content
             return self._parse_llm_response(content)
         except Exception as e:
-            print(f"❌ LLM 오류: {e}")
+            print(f"❌ OpenAI API 오류: {e}")
             return self._mock_llm_analysis(match)
     
     def _mock_llm_analysis(self, match: LiveMatch) -> Dict:
