@@ -258,7 +258,7 @@ else:
                     EV {pick.ev*100:+.1f}%
                 </span>
                 <div class="kelly-text" style="margin-top:8px;">
-                    {pick.model_version}
+                    {getattr(pick, 'model_version', 'WorldClass-v1.0')}
                 </div>
             </div>
             """, unsafe_allow_html=True)
