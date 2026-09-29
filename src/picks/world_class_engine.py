@@ -52,6 +52,11 @@ class WorldClassPick:
     draw_odds: float = 0.0  # 0이면 2-way 시장
     away_odds: float = 0.0
     
+    # 선택된 결과 (EV가 가장 높은 결과)
+    selected: str = ""
+    selected_prob: float = 0.0
+    selected_odds: float = 0.0
+    
     # EV / Kelly
     ev_percent: float = 0.0
     kelly_fraction: float = 0.0
@@ -81,9 +86,10 @@ class WorldClassEngine:
     핵심 전략:
     1. 앙상블 확률 = Poisson(40%) + Monte Carlo(35%) + 배당역산(25%)
     2. EV = (앙상블확률 × 배당) - 1
-    3. EV < 0% → 픽 제외
-    4. Fractional Kelly (절반)으로 베팅 비율 산출
-    5. 품질점수 = EV × 10 + 신뢰도 + 모델일치도
+    3. 경기마다 EV가 가장 높은 결과를 선택, EV <= 0% → 픽 제외
+    4. 픽은 EV 순으로 정렬
+    5. Fractional Kelly (절반)으로 베팅 비율 산출: f* = (p×odds - 1) / (odds - 1)
+    6. 조합(parlay) 배당 = 각 픽 배당의 곱
     """
     
     def __init__(self, seed: int = 42):
@@ -213,8 +219,8 @@ class WorldClassEngine:
         if edge <= 0:
             return 0.0
         
-        q = 1 - probability
-        full_kelly = edge / odds if odds > 0 else 0
+        # f* = (bp - q) / b, b = odds - 1  ⇔  edge / (odds - 1)
+        full_kelly = edge / (odds - 1)
         
         # Fractional Kelly (변동성 완화)
         return max(0, full_kelly * fraction)
@@ -281,10 +287,7 @@ class WorldClassEngine:
         parts.append(f"📊 {pick.home_team} vs {pick.away_team}")
         
         # 모델별 예측
-        best = max(pick.ensemble_prob, key=pick.ensemble_prob.get)
-        best_prob = pick.ensemble_prob[best]
-        
-        parts.append(f"\n🔮 앙상블 예측: {best.upper()} {best_prob:.1%}")
+        parts.append(f"\n🔮 선택: {pick.selected.upper()} @ {pick.selected_odds:.2f} (앙상블 확률 {pick.selected_prob:.1%})")
         parts.append(f"   ├─ Poisson: {max(pick.poisson_prob, key=pick.poisson_prob.get).upper()}")
         parts.append(f"   ├─ Monte Carlo: {max(pick.monte_carlo_prob, key=pick.monte_carlo_prob.get).upper()}")
         parts.append(f"   └─ 배당역산: {max(pick.odds_implied_prob, key=pick.odds_implied_prob.get).upper()}")
@@ -297,7 +300,7 @@ class WorldClassEngine:
         
         # Kelly
         if pick.half_kelly > 0:
-            parts.append(f"📈 Half-Kelly: {pick.half_kelly:.1f}%")
+            parts.append(f"📈 Half-Kelly: {pick.half_kelly * 100:.1f}%")
         
         # 아비트라지
         if pick.is_arbitrage:
@@ -353,13 +356,16 @@ class WorldClassEngine:
         # 2. 앙상블 확률
         ensemble = self.ensemble_probability(poisson, monte_carlo, odds_implied)
         
-        # 3. 최고 결과 선택
-        best = max(ensemble, key=ensemble.get)
+        # 3~4. 결과별 EV 계산 → EV가 가장 높은 결과 선택
+        odds_by_outcome = {'home': home_odds, 'draw': draw_odds, 'away': away_odds}
+        ev_by_outcome = {
+            k: self.calculate_ev(ensemble[k], o)
+            for k, o in odds_by_outcome.items() if o > 1
+        }
+        best = max(ev_by_outcome, key=ev_by_outcome.get)
         best_prob = ensemble[best]
-        best_odds = {'home': home_odds, 'draw': draw_odds, 'away': away_odds}[best]
-        
-        # 4. EV 계산
-        ev = self.calculate_ev(best_prob, best_odds)
+        best_odds = odds_by_outcome[best]
+        ev = ev_by_outcome[best]
         
         # 5. Kelly 계산
         kelly = self.calculate_kelly(best_prob, best_odds, fraction=0.5)
@@ -381,7 +387,7 @@ class WorldClassEngine:
         # 9. 핵심 요인
         factors = []
         if ev > 0:
-            factors.append(f"EV +{ev:.1f}%로 가치 배팅 조건 충족")
+            factors.append(f"{best.upper()} EV +{ev * 100:.1f}%로 가치 배팅 조건 충족")
         if ensemble['home'] > 0.6:
             factors.append(f"홈팀 승률 {ensemble['home']:.1%}로 홈 어드밴티지 큼")
         elif ensemble['away'] > 0.5:
@@ -404,6 +410,9 @@ class WorldClassEngine:
             home_odds=home_odds,
             draw_odds=draw_odds,
             away_odds=away_odds,
+            selected=best,
+            selected_prob=best_prob,
+            selected_odds=best_odds,
             ev_percent=ev * 100,
             kelly_fraction=kelly * 2,  # Full Kelly
             half_kelly=kelly,
@@ -419,37 +428,55 @@ class WorldClassEngine:
         return pick
     
     def generate_picks(self, matches: List[Dict], 
-                      min_ev: float = -5.0,
+                      min_ev: float = 0.0,
                       top_n: int = 3) -> List[WorldClassPick]:
         """
         여러 경기 중 최고의 픽 선정
         
         Args:
             matches: 경기 리스트
-            min_ev: 최소 EV 필터 (%). 기본 -5% (약간의 여유)
+            min_ev: 최소 EV (%). 이 값보다 EV가 큰 픽만 남김. 기본 0% (양의 EV만)
             top_n: 반환할 픽 수
         """
-        picks = []
+        picks = [p for p in (self.analyze_match(m) for m in matches) if p]
         
-        for match in matches:
-            pick = self.analyze_match(match)
-            if pick and pick.quality_score >= 40:  # 최소 품질 기준
-                picks.append(pick)
+        # EV 필터링 (양의 기대값만)
+        filtered = [p for p in picks if p.ev_percent > min_ev]
         
-        # 품질 점수 기준 정렬
-        picks.sort(key=lambda p: p.quality_score, reverse=True)
+        # EV 기준 정렬 (동률이면 품질 점수)
+        filtered.sort(key=lambda p: (p.ev_percent, p.quality_score), reverse=True)
         
-        # EV 필터링 (너무 낮은 EV 제외)
-        filtered = [p for p in picks if p.ev_percent >= min_ev]
-        
-        # 아비트라지 우선
-        arbitrage_picks = [p for p in filtered if p.is_arbitrage]
-        normal_picks = [p for p in filtered if not p.is_arbitrage]
-        
-        # 최종: 아비트라지 먼저, 그 다음 품질 순
-        final = arbitrage_picks + normal_picks
+        # 최종: 아비트라지 먼저, 그 다음 EV 순
+        final = [p for p in filtered if p.is_arbitrage] + [p for p in filtered if not p.is_arbitrage]
         
         return final[:top_n]
+    
+    @staticmethod
+    def build_parlay(picks: List[WorldClassPick], kelly_fraction: float = 0.5) -> Dict:
+        """
+        조합(parlay) 배당·확률·EV·Kelly 계산
+        
+        각 픽이 서로 다른 경기라 독립이라고 가정:
+        - 조합 배당 = Π 배당
+        - 적중 확률 = Π 확률
+        - EV = 적중 확률 × 조합 배당 - 1
+        """
+        if not picks:
+            return {'legs': 0, 'total_odds': 0.0, 'probability': 0.0,
+                    'ev_percent': -100.0, 'half_kelly': 0.0}
+        
+        total_odds = float(np.prod([p.selected_odds for p in picks]))
+        probability = float(np.prod([p.selected_prob for p in picks]))
+        ev = probability * total_odds - 1
+        full_kelly = ev / (total_odds - 1) if ev > 0 and total_odds > 1 else 0.0
+        
+        return {
+            'legs': len(picks),
+            'total_odds': round(total_odds, 4),
+            'probability': round(probability, 6),
+            'ev_percent': round(ev * 100, 2),
+            'half_kelly': round(full_kelly * kelly_fraction, 4),
+        }
     
     def to_dict(self, pick: WorldClassPick) -> Dict:
         """픽을 딕셔너리로 변환"""
@@ -461,7 +488,8 @@ class WorldClassEngine:
             'league': pick.league,
             'match_time': pick.match_time,
             'ensemble_prob': pick.ensemble_prob,
-            'selected': max(pick.ensemble_prob, key=pick.ensemble_prob.get),
+            'selected': pick.selected,
+            'selected_odds': pick.selected_odds,
             'odds': {
                 'home': pick.home_odds,
                 'draw': pick.draw_odds,

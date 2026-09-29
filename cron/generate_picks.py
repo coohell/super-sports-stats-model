@@ -75,14 +75,15 @@ def generate_world_class_picks():
     
     # 픽 생성
     print("\n🧠 AI 분석 중...")
-    picks = engine.generate_picks(matches, min_ev=-5.0, top_n=5)
+    picks = engine.generate_picks(matches, min_ev=0.0, top_n=5)
     
     if not picks:
-        print("⚠️ 적합한 픽이 없습니다. (EV 기준 미달)")
+        print("⚠️ 적합한 픽이 없습니다. (양의 EV 픽 없음)")
         return
     
-    # 상위 3개만 저장
+    # EV 상위 3개만 저장
     top_picks = picks[:3]
+    parlay = engine.build_parlay(top_picks)
     
     # DB 저장
     print("\n💾 데이터베이스 저장 중...")
@@ -102,8 +103,14 @@ def generate_world_class_picks():
             'home_team': pick.home_team,
             'away_team': pick.away_team,
             'match_time': pick.match_time,
-            'pick': max(pick.ensemble_prob, key=pick.ensemble_prob.get),
-            'odds': getattr(pick, f"{max(pick.ensemble_prob, key=pick.ensemble_prob.get)}_odds"),
+            'home_odds': pick.home_odds,
+            'draw_odds': pick.draw_odds,
+            'away_odds': pick.away_odds,
+            'pick': pick.selected,
+            'odds': pick.selected_odds,
+            'ev': pick.ev_percent / 100,
+            'edge': pick.selected_prob - pick.odds_implied_prob.get(pick.selected, 0.0),
+            'kelly_fraction': pick.kelly_fraction,
             'confidence': pick.quality_score,
             'reason': pick.explanation[:500],
             'model_version': pick.model_version
@@ -111,7 +118,8 @@ def generate_world_class_picks():
         
         pick_id = db.add_pick(pick_data)
         saved_picks.append(pick_id)
-        print(f"   ✓ 픽 #{i} 저장: {pick.home_team} vs {pick.away_team} (품질: {pick.quality_score:.1f})")
+        print(f"   ✓ 픽 #{i} 저장: {pick.home_team} vs {pick.away_team} "
+              f"{pick.selected.upper()} @ {pick.selected_odds:.2f} (EV {pick.ev_percent:+.1f}%)")
     
     # 조합 저장
     if len(saved_picks) >= 2:
@@ -119,10 +127,12 @@ def generate_world_class_picks():
             'combo_id': combo_id,
             'date': date_str,
             'picks': json.dumps(saved_picks),
-            'total_odds': 0,  # 나중에 계산
+            'total_odds': parlay['total_odds'],
             'status': 'pending'
         })
-        print(f"   ✓ 조합 저장: {combo_id}")
+        print(f"   ✓ 조합 저장: {combo_id} | 배당 {parlay['total_odds']:.2f} | "
+              f"적중확률 {parlay['probability']:.1%} | EV {parlay['ev_percent']:+.1f}% | "
+              f"Half-Kelly {parlay['half_kelly']:.1%}")
     
     # 결과 출력
     print("\n" + "=" * 70)
@@ -130,7 +140,7 @@ def generate_world_class_picks():
     print("=" * 70)
     
     for i, pick in enumerate(top_picks, 1):
-        print(f"\n🏆 픽 #{i} | 품질점수: {pick.quality_score:.1f}/100")
+        print(f"\n🏆 픽 #{i} | EV {pick.ev_percent:+.1f}% | 품질점수: {pick.quality_score:.1f}/100")
         print(pick.explanation)
         print("-" * 70)
     
@@ -140,7 +150,8 @@ def generate_world_class_picks():
         'model_version': 'WorldClass-v1.0',
         'total_matches': len(matches),
         'picks_generated': len(top_picks),
-        'picks': [engine.to_dict(p) for p in top_picks]
+        'picks': [engine.to_dict(p) for p in top_picks],
+        'parlay': parlay
     }
     
     report_path = f'/tmp/superpicks_report_{date_str}.json'
