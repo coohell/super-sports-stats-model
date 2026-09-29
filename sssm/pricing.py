@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
-from .markets import MARKETS, Fixture, Selection
+from . import markets as mk
+from .markets import Fixture, Selection
 from .odds import devig
 
 
@@ -17,7 +18,7 @@ from .odds import devig
 class PricingConfig:
     sharp_weight: float = 0.8
     devig_method: str = "power"
-    markets: tuple = tuple(MARKETS)
+    markets: Optional[tuple] = None  # None 이면 bet365 가 제공하는 지원 마켓 전부
 
 
 @dataclass
@@ -30,13 +31,16 @@ class ValueFilter:
 
 def price_fixture(fx: Fixture, model=None, cfg: Optional[PricingConfig] = None) -> List[Selection]:
     cfg = cfg or PricingConfig()
-    model_probs = model.predict(fx.home, fx.away) if model is not None else None
+    offered = [m for m in fx.odds.get("bet365", {}) if mk.is_supported(m)]
+    if cfg.markets is not None:
+        offered = [m for m in offered if m in cfg.markets]
+    model_probs = model.predict(fx.home, fx.away, offered) if model is not None and offered else None
     out: List[Selection] = []
-    for market in cfg.markets:
+    for market in offered:
         b365 = fx.market("bet365", market)
         if not b365:
             continue
-        outcomes = MARKETS[market]
+        outcomes = mk.outcomes(market)
         sharp_odds = fx.market("pinnacle", market)
         sharp = dict(zip(outcomes, devig([sharp_odds[o] for o in outcomes], cfg.devig_method))) if sharp_odds else None
         mp = model_probs.get(market) if model_probs else None

@@ -120,9 +120,12 @@ def run_apifootball(league: int, season: int, days: int = 3, settings: Optional[
     return analyze(fixtures, model, f"api-football:{league}/{season}", settings)
 
 
-def run_theoddsapi(sport: str, settings: Optional[Settings] = None) -> Report:
+def run_theoddsapi(sport: str, settings: Optional[Settings] = None, markets: tuple = ("h2h", "spreads", "totals")) -> Report:
     from .sources.theoddsapi import TheOddsAPI
 
-    fixtures = TheOddsAPI().upcoming(sport)
-    return analyze(fixtures, None, f"theoddsapi:{sport}", settings,
-                   ["TheOddsAPI 는 팀 전력 모델 없이 Pinnacle 대비 가격만 비교합니다."])
+    api = TheOddsAPI()
+    fixtures = api.upcoming(sport, markets=markets)
+    notes = ["TheOddsAPI 는 팀 전력 모델 없이 Pinnacle 대비 가격만 비교합니다."]
+    if api.remaining is not None:
+        notes.append(f"TheOddsAPI 남은 요청 수: {api.remaining}")
+    return analyze(fixtures, None, f"theoddsapi:{sport}", settings, notes)
