@@ -62,14 +62,18 @@ def main(argv=None) -> None:
     pk = sub.add_parser("picks", help="오늘의 최강 조합")
     pk.add_argument("--source", choices=["demo", "file", "apifootball", "theodds"], default="demo")
     pk.add_argument("--file", type=Path, help="--source file 일 때 경기/배당 JSON")
-    pk.add_argument("--league", type=int, default=39, help="API-Football 리그 id (39=EPL)")
-    pk.add_argument("--season", type=int, default=2025)
+    pk.add_argument("--league", type=int, nargs="+", default=[39],
+                    help="API-Football 리그 id, 여러 개 가능 (39=EPL 140=라리가 78=분데스 135=세리에A 61=리그1)")
+    pk.add_argument("--season", type=int, default=None, help="기본: 현재 시즌 (7월 기준)")
     pk.add_argument("--days", type=int, default=3)
     pk.add_argument("--sport", default="aussierules_afl", help="TheOddsAPI 종목 키")
     pk.add_argument("--markets", default="h2h,spreads,totals", help="TheOddsAPI 마켓 (h2h,spreads,totals,btts)")
     pk.add_argument("--bankroll", type=float, default=1_000_000, help="자본 (원)")
     pk.add_argument("--model-weight", type=float, default=0.0, help="자체 모델 섞는 비율 (model-eval 로 근거 확인)")
-    pk.add_argument("--record", action="store_true", help="배당 스냅샷과 추천 배팅을 data/ 에 기록 (CLV 추적)")
+    pk.add_argument("--record", action="store_true",
+                    help="배당 스냅샷과 추천 배팅을 기록 (CLV 추적, 위치는 SSSM_DATA_DIR 또는 data/)")
+    pk.add_argument("--snapshot-only", action="store_true",
+                    help="배당 스냅샷만 기록하고 추천 배팅은 장부에 남기지 않음 (킥오프 직전 마감 배당 수집용)")
     pk.add_argument("--out", type=Path, default=ROOT / "reports" / "latest.json")
     engine_args(pk)
 
@@ -124,7 +128,8 @@ def main(argv=None) -> None:
 
     if a.cmd == "picks":
         pricing, value, port = configs()
-        st = pipeline.Settings(pricing=pricing, value=value, portfolio=port, bankroll=a.bankroll, record=a.record)
+        st = pipeline.Settings(pricing=pricing, value=value, portfolio=port, bankroll=a.bankroll,
+                               record=a.record or a.snapshot_only, log_bets=not a.snapshot_only)
         if a.source == "demo":
             rep = pipeline.run_file(settings=st)
         elif a.source == "file":

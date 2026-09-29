@@ -236,3 +236,19 @@ def test_http_error_does_not_leak_api_key():
         TheOddsAPI(key="SECRETKEY", session=sess).upcoming("soccer_epl")
     assert "SECRETKEY" not in str(exc.value)
     assert "401" in str(exc.value)
+
+
+def test_apifootball_multi_league_looks_up_bookmakers_once(monkeypatch):
+    sess = _af_session(
+        bookmakers=lambda: FakeResp({"response": [{"id": 8, "name": "Bet365"}, {"id": 4, "name": "Pinnacle"}]}),
+        odds_pages={8: [[_af_item(1, 8, "Bet365", "2.1")]], 4: [[_af_item(1, 4, "Pinnacle", "2.0")]]},
+        fixtures=[_af_fixture(1, "A", "B")],
+    )
+    monkeypatch.setattr("sssm.sources.apifootball.APIFootball.__init__",
+                        lambda self, key=None, session=None: (setattr(self, "key", "K"), setattr(self, "http", sess))[0])
+    from sssm import pipeline
+
+    rep = pipeline.run_apifootball([39, 140], 2026, 2)
+    assert rep.source == "api-football:39,140/2026"
+    assert sum(u.endswith("/odds/bookmakers") for u, _ in sess.calls) == 1
+    assert {p["league"] for u, p in sess.calls if u.endswith("/fixtures")} == {39, 140}

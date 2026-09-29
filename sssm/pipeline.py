@@ -31,6 +31,7 @@ class Settings:
     bankroll: float = 1_000_000
     use_model: bool = False  # 자체 모델 학습 여부 (model_weight > 0 이거나 샤프 가격이 없을 때 의미)
     record: bool = False  # 스냅샷과 추천 배팅을 data/ 에 기록
+    log_bets: bool = True  # record 일 때 추천 배팅도 장부에 남길지 (False 면 스냅샷만: 마감 배당 수집용)
 
 
 @dataclass
@@ -147,7 +148,7 @@ def analyze(fixtures: List[Fixture], model: Optional[DixonColes], source: str,
     if settings.record:
         moves = tracking.movements(fixtures, tracking.load_snapshots(), settings.pricing)
         tracking.record_snapshot(fixtures)
-        if pf.bets:
+        if pf.bets and settings.log_bets:
             tracking.log_bets(pf.bets, settings.bankroll)
         stale = sum(1 for v in moves.values() if v["stale"])
         if stale:
@@ -177,16 +178,27 @@ def run_file(path: Path = SAMPLE_FIXTURES, results_csv: Optional[Path] = None, s
     return analyze(fixtures, model, f"file:{Path(path).name}", settings, notes)
 
 
-def run_apifootball(league: int, season: int, days: int = 3, settings: Optional[Settings] = None) -> Report:
+def current_season(today=None) -> int:
+    """API-Football 시즌 연도: 7월 이후면 올해, 그 전이면 작년에 시작한 시즌."""
+    today = today or datetime.now(timezone.utc).date()
+    return today.year if today.month >= 7 else today.year - 1
+
+
+def run_apifootball(league, season: Optional[int] = None, days: int = 3, settings: Optional[Settings] = None) -> Report:
+    """league: 리그 id 하나 또는 여러 개. 여러 리그의 경기를 한 포트폴리오로 묶는다."""
     from .sources.apifootball import APIFootball
 
     settings = settings or Settings()
+    leagues = [league] if isinstance(league, int) else list(league)
+    season = season or current_season()
     api = APIFootball()
     today = datetime.now(timezone.utc).date()
-    fixtures = api.upcoming(league, season, today.isoformat(), (today + timedelta(days=days)).isoformat())
-    model = _model_if_needed(settings, lambda: pd.concat([api.results(league, season - 1), api.results(league, season)],
-                                                         ignore_index=True))
-    return analyze(fixtures, model, f"api-football:{league}/{season}", settings)
+    fixtures: List[Fixture] = []
+    for lg in leagues:
+        fixtures += api.upcoming(lg, season, today.isoformat(), (today + timedelta(days=days)).isoformat())
+    model = _model_if_needed(settings, lambda: pd.concat(
+        [api.results(lg, s) for lg in leagues for s in (season - 1, season)], ignore_index=True))
+    return analyze(fixtures, model, f"api-football:{','.join(map(str, leagues))}/{season}", settings)
 
 
 def run_theoddsapi(sport: str, settings: Optional[Settings] = None, markets: tuple = ("h2h", "spreads", "totals")) -> Report:
