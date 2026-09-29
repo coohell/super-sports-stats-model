@@ -1,6 +1,7 @@
 """명령줄 진입점: python -m sssm <명령>
 
   picks     오늘의 +EV 선택지와 최강 조합
+  fetch-history  EPL 과거 결과+bet365/Pinnacle 배당 받기 (data/history/)
   backtest  과거 데이터로 모델/전략 검증
   ratings   팀 전력 순위
 """
@@ -45,8 +46,12 @@ def main(argv=None) -> None:
     pk.add_argument("--kelly", type=float, default=0.25, help="켈리 분수 (0.25 = 1/4 켈리)")
     pk.add_argument("--out", type=Path, default=ROOT / "reports" / "latest.json")
 
+    fh = sub.add_parser("fetch-history", help="EPL 과거 결과와 배당을 data/history/ 에 받기")
+    fh.add_argument("--first-season", default="1516", help="받을 첫 시즌 코드 (예: 1516)")
+
     bt = sub.add_parser("backtest", help="walk-forward 백테스트")
-    bt.add_argument("--csv", type=Path, nargs="*", help="결과/배당 CSV (기본: 내장 EPL 2021-25 결과)")
+    bt.add_argument("--csv", type=Path, nargs="*",
+                    help="결과/배당 CSV (기본: data/history/ 가 있으면 그것, 없으면 내장 EPL 2021-25 결과)")
     bt.add_argument("--start", help="검증 시작일 (YYYY-MM-DD)")
     bt.add_argument("--sharp-weight", type=float, default=0.8)
     bt.add_argument("--min-ev", type=float, default=0.02)
@@ -73,11 +78,14 @@ def main(argv=None) -> None:
             rep = pipeline.run_theoddsapi(a.sport, st)
         _print_report(rep)
         print(f"\n저장: {rep.save(a.out)}")
+    elif a.cmd == "fetch-history":
+        paths = history.fetch_epl(first_season=a.first_season)
+        print(f"{len(paths)}개 시즌 저장: {paths[0].parent} ({paths[0].name} ~ {paths[-1].name})")
     elif a.cmd == "backtest":
-        df = history.load(a.csv or history.DEFAULT_RESULTS)
+        df = history.load(a.csv or history.history_files() or history.DEFAULT_RESULTS)
         print(backtest.run(df, a.start, sharp_weight=a.sharp_weight, min_ev=a.min_ev).to_text())
         if not history.has_odds(df):
-            print("\n배당 컬럼이 없어 ROI 는 계산하지 않았습니다. football-data.co.uk 시즌 CSV 를 --csv 로 넣으면 계산합니다.")
+            print("\n배당 컬럼이 없어 ROI 는 계산하지 않았습니다. `python -m sssm fetch-history` 로 배당을 받으면 계산합니다.")
     elif a.cmd == "ratings":
         from .model import DixonColes
 
