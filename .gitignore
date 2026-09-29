@@ -46,4 +46,9 @@ data/*.sqlite
 
 # 생성물
 reports/latest.json
+reports/latest.md
+# 실시간 기록과 과거 배당 원본 (football-data.co.uk 권리)
+data/snapshots/
+data/ledger.jsonl
+data/history/
 .pytest_cache/

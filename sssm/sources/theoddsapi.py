@@ -61,7 +61,11 @@ class TheOddsAPI:
 
 def parse_event(e: dict) -> Fixture:
     home, away = e["home_team"], e["away_team"]
-    fx = Fixture(fixture_id=e["id"], kickoff=e["commence_time"], league=e.get("sport_title", ""), home=home, away=away)
+    sport_key = str(e.get("sport_key", ""))
+    # 축구가 아니면(AFL/NRL 등) 스코어 격자를 쓸 수 없어 승패(H2H)만 가격을 매긴다
+    sport = "football" if sport_key.startswith("soccer") else (sport_key or "other")
+    fx = Fixture(fixture_id=e["id"], kickoff=e["commence_time"], league=e.get("sport_title", ""), home=home, away=away,
+                 sport=sport)
     for bm in e.get("bookmakers", []):
         book = BOOK_KEYS.get(bm["key"])
         if not book:

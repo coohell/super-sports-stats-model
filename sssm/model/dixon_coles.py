@@ -34,23 +34,10 @@ STANDARD_MARKETS = ("1X2", "OU:2.5", "BTTS")
 
 
 def market_prob(score: np.ndarray, market: str) -> Optional[Dict[str, float]]:
-    """득점 확률 행렬 score[h, a] 에서 한 마켓의 결과 확률을 뽑는다. 지원하지 않으면 None."""
-    kind, line = markets.split(market)
-    n = score.shape[0]
-    h, a = np.indices((n, n))
-    if kind == "1X2":
-        home, draw = float(score[h > a].sum()), float(np.trace(score))
-        return {"home": home, "draw": draw, "away": 1.0 - home - draw}
-    if kind == "BTTS":
-        yes = float(score[(h > 0) & (a > 0)].sum())
-        return {"yes": yes, "no": 1.0 - yes}
-    if kind == "OU" and line is not None and markets.is_half_line(line):
-        over = float(score[(h + a) > line].sum())
-        return {"over": over, "under": 1.0 - over}
-    if kind == "AH" and line is not None and markets.is_half_line(line):
-        home = float(score[(h - a + line) > 0].sum())  # line 은 홈 기준 핸디캡
-        return {"home": home, "away": 1.0 - home}
-    return None
+    """득점 확률 행렬 score[h, a] 에서 한 마켓의 결과별 적중 확률 (반승은 0.5). 지원하지 않으면 None."""
+    if not markets.is_supported(market) or not markets.is_grid_market(market) or markets.parse(market)[0] == "CS":
+        return None
+    return {o: float((score * markets.settle(market, o)[0]).sum()) for o in markets.outcomes(market)}
 
 
 def market_probs(score: np.ndarray, wanted=STANDARD_MARKETS) -> Dict[str, Dict[str, float]]:
