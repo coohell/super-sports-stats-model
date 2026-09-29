@@ -193,3 +193,23 @@ def test_download_mirror_writes_football_data_format(tmp_path):
 
     with pytest.raises(ValueError, match="2425"):
         history.download_mirror(["2425"], tmp_path, Sess())
+
+
+def test_snapshot_only_records_odds_but_no_bets(monkeypatch):
+    fx = Fixture("f1", "2026-10-01T15:00:00+00:00", "EPL", "H", "A",
+                 {"bet365": {"1X2": {"home": 2.2, "draw": 3.4, "away": 3.4}},
+                  "pinnacle": {"1X2": {"home": 2.0, "draw": 4.0, "away": 4.0}}})
+    calls = []
+    monkeypatch.setattr(tracking, "load_snapshots", lambda: {})
+    monkeypatch.setattr(tracking, "record_snapshot", lambda fxs: calls.append("snap"))
+    monkeypatch.setattr(tracking, "log_bets", lambda *a, **k: calls.append("bets"))
+    st = pipeline.Settings(pricing=PricingConfig(shrink=1.0), record=True, log_bets=False)
+    rep = pipeline.analyze([fx], None, "test", st)
+    assert rep.portfolio.bets and calls == ["snap"]
+
+
+def test_current_season_rolls_over_in_july():
+    from datetime import date
+
+    assert pipeline.current_season(date(2026, 9, 29)) == 2026
+    assert pipeline.current_season(date(2027, 3, 1)) == 2026

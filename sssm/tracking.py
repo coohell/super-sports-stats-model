@@ -20,12 +20,14 @@ from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 
-from .config import ROOT
+from .config import ROOT, env
 from .markets import Fixture
 from .pricing import PricingConfig, price_fixture, selections
 
-SNAP_DIR = ROOT / "data" / "snapshots"
-LEDGER = ROOT / "data" / "ledger.jsonl"
+# 컨테이너가 매번 새로 뜨는 환경에서는 SSSM_DATA_DIR 을 오래 남는 폴더로 두어 기록을 이어 간다
+DATA_DIR = Path(env("SSSM_DATA_DIR") or ROOT / "data")
+SNAP_DIR = DATA_DIR / "snapshots"
+LEDGER = DATA_DIR / "ledger.jsonl"
 
 
 def _now() -> str:

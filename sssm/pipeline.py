@@ -14,7 +14,7 @@ from . import history, tracking
 from .config import ROOT
 from .markets import Fixture
 from .model import DixonColes
-from .portfolio import Portfolio, PortfolioConfig, optimize
+from .portfolio import ComboPick, Portfolio, PortfolioConfig, best_combo, optimize
 from .pricing import FixturePricing, PricingConfig, Selection, ValueFilter, price_all, value_bets
 from .teams import norm
 
@@ -31,6 +31,8 @@ class Settings:
     bankroll: float = 1_000_000
     use_model: bool = False  # 자체 모델 학습 여부 (model_weight > 0 이거나 샤프 가격이 없을 때 의미)
     record: bool = False  # 스냅샷과 추천 배팅을 data/ 에 기록
+    min_legs: int = 0  # 2 이상이면 그 폴 수 이상 조합 하나를 따로 뽑는다 (best_combo)
+    log_bets: bool = True  # record 일 때 추천 배팅도 장부에 남길지 (False 면 스냅샷만: 마감 배당 수집용)
 
 
 @dataclass
@@ -45,6 +47,30 @@ class Report:
     settings: Settings
     notes: List[str] = field(default_factory=list)
     moves: Dict[tuple, dict] = field(default_factory=dict)
+    combo: Optional[ComboPick] = None
+
+    def combo_lines(self) -> List[str]:
+        c = self.combo
+        if c is None:
+            return []
+        bank = self.settings.bankroll
+        lines = [f"## {c.min_legs}폴 이상 최강 조합", ""]
+        if c.bet is None:
+            return lines + [f"+엣지 선택지가 있는 경기가 {c.n_value_fixtures}개뿐이라 {c.min_legs}폴 조합을 만들지 않았습니다. "
+                            "엣지 없는 폴로 채우면 기대값이 깎이기만 합니다.", ""]
+        b = c.bet
+        lines += ["| 경기 | 선택 | bet365 | 공정 확률 | 보정 엣지 |", "|---|---|---|---|---|"]
+        lines += [f"| {s.match} | {s.label} | {s.odds:.2f} | {s.fair_prob:.1%} | {s.edge:+.1%} |" for s in b.legs]
+        lines += ["", f"합산 배당 {b.odds:.2f} · 적중 확률 {b.win_prob:.1%} · EV {b.ev:+.1%} · 보정 엣지 {b.edge:+.1%} · "
+                      f"권장 금액 {bank * b.stake:,.0f}원 (자본의 {b.stake:.2%}, {self.settings.portfolio.kelly_fraction:g} 켈리)", ""]
+        if c.best_single is not None:
+            s1 = c.best_single
+            ratio = c.growth / c.single_growth if c.single_growth > 0 else float("nan")
+            lines += [f"비교: 가장 좋은 단식 {s1.legs[0].match} {s1.legs[0].label} @{s1.odds:.2f} 는 적중 {s1.win_prob:.1%}, "
+                      f"보정 엣지 {s1.edge:+.1%}. 켈리 기준 자본 성장은 조합이 단식의 {ratio:.1f}배"
+                      + (" (조합이 더 빠르지만 적중 확률이 낮아 대부분의 날은 이 배팅을 잃습니다)." if ratio > 1 else
+                         " (단식이 더 낫습니다. 과거 검증에서도 1~2% 엣지에서는 단식이 멀티보다 좋았습니다)."), ""]
+        return lines
 
     def to_dict(self) -> dict:
         def sel(s: Selection) -> dict:
@@ -65,6 +91,12 @@ class Report:
             "portfolio": self.portfolio.to_dict(self.settings.bankroll),
             "value": [sel(s) for s in self.value],
             "top_candidates": [b.to_dict() for b in self.portfolio.candidates[:20]],
+            "combo": None if self.combo is None else {
+                "min_legs": self.combo.min_legs, "n_value_fixtures": self.combo.n_value_fixtures,
+                "bet": self.combo.bet and self.combo.bet.to_dict(self.settings.bankroll),
+                "growth": round(self.combo.growth, 7),
+                "best_single": self.combo.best_single and self.combo.best_single.to_dict(self.settings.bankroll),
+                "single_growth": round(self.combo.single_growth, 7)},
         }
 
     def save(self, path: Path) -> Path:
@@ -83,6 +115,7 @@ class Report:
             lines.append(f"> {n}")
         if self.notes:
             lines.append("")
+        lines += self.combo_lines()
         if not pf.bets:
             lines += ["**오늘은 걸 만한 배팅이 없습니다.** bet365 가 샤프 공정 가격보다 후한 곳이 없거나, "
                       "보정(shrink) 후 엣지가 문턱보다 작습니다. 걸지 않는 것도 전략입니다.", ""]
@@ -132,6 +165,8 @@ def analyze(fixtures: List[Fixture], model: Optional[DixonColes], source: str,
     pricings = {fp.fixture_id: fp for fp in fps}
     value = value_bets(sels, settings.value)
     pf = optimize(value, pricings, settings.portfolio)
+    combo = best_combo(value, pricings, settings.portfolio, settings.min_legs, max(settings.min_legs, 5)) \
+        if settings.min_legs >= 2 else None
 
     notes = list(notes or [])
     soft, sharps = settings.pricing.soft_book, settings.pricing.sharp_books
@@ -147,13 +182,17 @@ def analyze(fixtures: List[Fixture], model: Optional[DixonColes], source: str,
     if settings.record:
         moves = tracking.movements(fixtures, tracking.load_snapshots(), settings.pricing)
         tracking.record_snapshot(fixtures)
-        if pf.bets:
-            tracking.log_bets(pf.bets, settings.bankroll)
+        if settings.log_bets:
+            logged = list(pf.bets)
+            if combo is not None and combo.bet is not None and all(b.legs != combo.bet.legs for b in logged):
+                logged.append(combo.bet)
+            if logged:
+                tracking.log_bets(logged, settings.bankroll)
         stale = sum(1 for v in moves.values() if v["stale"])
         if stale:
             notes.append(f"직전 스냅샷 이후 Pinnacle 은 움직였는데 bet365 는 그대로인 선택지 {stale}개 (움직임 열 참고).")
     return Report(datetime.now(timezone.utc).isoformat(timespec="seconds"), source, fixtures, pricings, sels, value,
-                  pf, settings, notes, moves)
+                  pf, settings, notes, moves, combo)
 
 
 # ---- 소스별 진입점 ----
@@ -177,16 +216,27 @@ def run_file(path: Path = SAMPLE_FIXTURES, results_csv: Optional[Path] = None, s
     return analyze(fixtures, model, f"file:{Path(path).name}", settings, notes)
 
 
-def run_apifootball(league: int, season: int, days: int = 3, settings: Optional[Settings] = None) -> Report:
+def current_season(today=None) -> int:
+    """API-Football 시즌 연도: 7월 이후면 올해, 그 전이면 작년에 시작한 시즌."""
+    today = today or datetime.now(timezone.utc).date()
+    return today.year if today.month >= 7 else today.year - 1
+
+
+def run_apifootball(league, season: Optional[int] = None, days: int = 3, settings: Optional[Settings] = None) -> Report:
+    """league: 리그 id 하나 또는 여러 개. 여러 리그의 경기를 한 포트폴리오로 묶는다."""
     from .sources.apifootball import APIFootball
 
     settings = settings or Settings()
+    leagues = [league] if isinstance(league, int) else list(league)
+    season = season or current_season()
     api = APIFootball()
     today = datetime.now(timezone.utc).date()
-    fixtures = api.upcoming(league, season, today.isoformat(), (today + timedelta(days=days)).isoformat())
-    model = _model_if_needed(settings, lambda: pd.concat([api.results(league, season - 1), api.results(league, season)],
-                                                         ignore_index=True))
-    return analyze(fixtures, model, f"api-football:{league}/{season}", settings)
+    fixtures: List[Fixture] = []
+    for lg in leagues:
+        fixtures += api.upcoming(lg, season, today.isoformat(), (today + timedelta(days=days)).isoformat())
+    model = _model_if_needed(settings, lambda: pd.concat(
+        [api.results(lg, s) for lg in leagues for s in (season - 1, season)], ignore_index=True))
+    return analyze(fixtures, model, f"api-football:{','.join(map(str, leagues))}/{season}", settings)
 
 
 def run_theoddsapi(sport: str, settings: Optional[Settings] = None, markets: tuple = ("h2h", "spreads", "totals")) -> Report:

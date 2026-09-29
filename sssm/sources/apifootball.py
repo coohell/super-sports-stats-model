@@ -55,6 +55,9 @@ class APIFootball:
     def bookmaker_ids(self, names: Iterable[str]) -> Dict[str, int]:
         """북메이커 이름(bet365, pinnacle) -> API-Football id."""
         wanted = [n.lower() for n in names]
+        cache = getattr(self, "_bookmaker_cache", None)
+        if cache is not None and all(n in cache for n in wanted):  # 여러 리그를 돌 때 조회 한 번으로 (무료 요청 한도)
+            return {n: cache[n] for n in wanted}
         found: Dict[str, int] = {}
         lookup_ok = False
         try:
@@ -71,6 +74,7 @@ class APIFootball:
             if lookup_ok or n not in FALLBACK_BOOKMAKER_IDS:
                 raise RuntimeError(f"API-Football 에서 북메이커 '{n}' 를 찾지 못했습니다")
             found[n] = FALLBACK_BOOKMAKER_IDS[n]
+        self._bookmaker_cache = {**(cache or {}), **found}
         return found
 
     # ---- 경기 결과 (모델 학습용) ----

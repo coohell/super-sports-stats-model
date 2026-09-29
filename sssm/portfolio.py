@@ -244,3 +244,49 @@ def joint_prob(legs: Sequence[Selection], pricing: FixturePricing, which: str = 
     for s in legs:
         mask &= s.W >= 1.0 - 1e-9
     return float(p[mask].sum())
+
+
+@dataclass
+class ComboPick:
+    """3폴 이상 같은 '한 장짜리' 조합을 원할 때: 조합 하나만 걸 경우 가장 빠르게 자본을 키우는 것."""
+    bet: Optional[Bet]
+    growth: float  # 이 조합 하나만 켈리 비율로 걸 때 기대 로그 성장 (보수적 확률)
+    best_single: Optional[Bet]
+    single_growth: float
+    n_value_fixtures: int  # +엣지 선택지가 있는 경기 수
+    min_legs: int
+
+
+def _single_bet_growth(g: np.ndarray, max_each: float, kf: float) -> Tuple[float, float]:
+    """배팅 하나(시나리오 수익 g)를 분수 켈리로 걸 때의 비율과 기대 로그 성장."""
+    f = float(kelly_weights(g[None, :], max_each / kf, max_each / kf)[0]) * kf
+    return f, float(np.mean(np.log1p(f * (g - 1.0))))
+
+
+def best_combo(value: Sequence[Selection], pricings: Dict[str, FixturePricing],
+               cfg: Optional[PortfolioConfig] = None, min_legs: int = 3, max_legs: int = 5) -> ComboPick:
+    """+엣지 선택지만으로(경기당 한 폴) min_legs~max_legs 폴 조합을 만들어, 그 하나만 걸 때 기대 로그 성장이
+    가장 큰 조합을 고른다. 같은 기준으로 가장 좋은 단식도 함께 돌려준다(비교용)."""
+    cfg = cfg or PortfolioConfig()
+    kf = cfg.kelly_fraction
+    best_per_fixture: Dict[str, Selection] = {}
+    for s in value:
+        if s.edge > 0 and (s.fixture_id not in best_per_fixture or s.edge > best_per_fixture[s.fixture_id].edge):
+            best_per_fixture[s.fixture_id] = s
+    pool = sorted(best_per_fixture.values(), key=lambda s: s.edge, reverse=True)[: cfg.pool]
+    singles = [make_bet([s], pricings, cfg) for s in pool]
+    combos = [make_bet(legs, pricings, cfg) for k in range(min_legs, max_legs + 1) for legs in combinations(pool, k)]
+    combos = [b for b in combos if b.edge > 0]
+    empty = ComboPick(None, 0.0, None, 0.0, len(best_per_fixture), min_legs)
+    if not singles:
+        return empty
+    G = _scenario_returns(singles + combos, pricings, cfg.n_scenarios, cfg.seed)
+    scored = []
+    for b, g in zip(singles + combos, G):
+        b.stake, gr = _single_bet_growth(g, cfg.max_bet, kf)
+        scored.append((gr, b))
+    single_gr, single = max(scored[: len(singles)], key=lambda t: t[0])
+    if not combos:
+        return ComboPick(None, 0.0, single, single_gr, len(best_per_fixture), min_legs)
+    combo_gr, combo = max(scored[len(singles):], key=lambda t: t[0])
+    return ComboPick(combo, combo_gr, single, single_gr, len(best_per_fixture), min_legs)
