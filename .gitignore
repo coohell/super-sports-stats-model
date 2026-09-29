@@ -43,3 +43,7 @@ data/*.sqlite
 
 # Logs
 *.log
+
+# 생성물
+reports/latest.json
+.pytest_cache/

@@ -42,7 +42,6 @@ source venv/bin/activate
 echo "📦 Python 패키지 설치..."
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
-pip install -q -r webapp/requirements.txt 2>/dev/null || true
 
 # 6. Streamlit 설정
 echo "🔧 Streamlit 설정..."

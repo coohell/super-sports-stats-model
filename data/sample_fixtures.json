@@ -1,0 +1,317 @@
+{
+ "note": "예시 배당. 실제 bet365/Pinnacle 가격이 아닙니다.",
+ "fixtures": [
+  {
+   "fixture_id": "demo-1",
+   "kickoff": "2026-10-03T14:00:00Z",
+   "league": "Premier League",
+   "home": "Arsenal",
+   "away": "Everton",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 1.47,
+      "draw": 4.58,
+      "away": 8.02
+     },
+     "OU2.5": {
+      "over": 2.21,
+      "under": 1.75
+     },
+     "BTTS": {
+      "yes": 2.57,
+      "no": 1.57
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 1.41,
+      "draw": 4.78,
+      "away": 7.91
+     },
+     "OU2.5": {
+      "over": 2.13,
+      "under": 1.74
+     },
+     "BTTS": {
+      "yes": 2.44,
+      "no": 1.57
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-2",
+   "kickoff": "2026-10-03T14:00:00Z",
+   "league": "Premier League",
+   "home": "Liverpool",
+   "away": "Brentford",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 1.51,
+      "draw": 5.46,
+      "away": 5.55
+     },
+     "OU2.5": {
+      "over": 1.42,
+      "under": 3.12
+     },
+     "BTTS": {
+      "yes": 1.56,
+      "no": 2.61
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 1.46,
+      "draw": 5.21,
+      "away": 6.01
+     },
+     "OU2.5": {
+      "over": 1.47,
+      "under": 2.73
+     },
+     "BTTS": {
+      "yes": 1.46,
+      "no": 2.78
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-3",
+   "kickoff": "2026-10-03T14:00:00Z",
+   "league": "Premier League",
+   "home": "Chelsea",
+   "away": "Newcastle",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 2.32,
+      "draw": 4.16,
+      "away": 2.83
+     },
+     "OU2.5": {
+      "over": 1.67,
+      "under": 2.34
+     },
+     "BTTS": {
+      "yes": 1.53,
+      "no": 2.69
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 2.15,
+      "draw": 4.67,
+      "away": 2.73
+     },
+     "OU2.5": {
+      "over": 1.78,
+      "under": 2.07
+     },
+     "BTTS": {
+      "yes": 1.46,
+      "no": 2.76
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-4",
+   "kickoff": "2026-10-03T14:00:00Z",
+   "league": "Premier League",
+   "home": "Man City",
+   "away": "Aston Villa",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 1.52,
+      "draw": 4.95,
+      "away": 6.07
+     },
+     "OU2.5": {
+      "over": 1.6,
+      "under": 2.51
+     },
+     "BTTS": {
+      "yes": 1.75,
+      "no": 2.21
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 1.62,
+      "draw": 4.52,
+      "away": 4.86
+     },
+     "OU2.5": {
+      "over": 1.5,
+      "under": 2.64
+     },
+     "BTTS": {
+      "yes": 1.71,
+      "no": 2.18
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-5",
+   "kickoff": "2026-10-04T14:00:00Z",
+   "league": "Premier League",
+   "home": "Brighton",
+   "away": "Tottenham",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 2.24,
+      "draw": 4.33,
+      "away": 2.88
+     },
+     "OU2.5": {
+      "over": 1.41,
+      "under": 3.16
+     },
+     "BTTS": {
+      "yes": 1.4,
+      "no": 3.24
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 2.0,
+      "draw": 4.31,
+      "away": 3.19
+     },
+     "OU2.5": {
+      "over": 1.37,
+      "under": 3.18
+     },
+     "BTTS": {
+      "yes": 1.35,
+      "no": 3.31
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-6",
+   "kickoff": "2026-10-04T14:00:00Z",
+   "league": "Premier League",
+   "home": "Crystal Palace",
+   "away": "Fulham",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 2.21,
+      "draw": 3.91,
+      "away": 3.15
+     },
+     "OU2.5": {
+      "over": 1.97,
+      "under": 1.93
+     },
+     "BTTS": {
+      "yes": 1.82,
+      "no": 2.11
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 2.1,
+      "draw": 3.7,
+      "away": 3.36
+     },
+     "OU2.5": {
+      "over": 1.83,
+      "under": 2.0
+     },
+     "BTTS": {
+      "yes": 1.71,
+      "no": 2.18
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-7",
+   "kickoff": "2026-10-04T14:00:00Z",
+   "league": "Premier League",
+   "home": "Wolves",
+   "away": "Bournemouth",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 2.86,
+      "draw": 3.88,
+      "away": 2.4
+     },
+     "OU2.5": {
+      "over": 1.87,
+      "under": 2.05
+     },
+     "BTTS": {
+      "yes": 1.76,
+      "no": 2.2
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 2.77,
+      "draw": 3.69,
+      "away": 2.42
+     },
+     "OU2.5": {
+      "over": 1.83,
+      "under": 2.01
+     },
+     "BTTS": {
+      "yes": 1.65,
+      "no": 2.28
+     }
+    }
+   }
+  },
+  {
+   "fixture_id": "demo-8",
+   "kickoff": "2026-10-04T14:00:00Z",
+   "league": "Premier League",
+   "home": "Man United",
+   "away": "Nott'm Forest",
+   "odds": {
+    "pinnacle": {
+     "1X2": {
+      "home": 2.41,
+      "draw": 3.69,
+      "away": 2.95
+     },
+     "OU2.5": {
+      "over": 1.98,
+      "under": 1.92
+     },
+     "BTTS": {
+      "yes": 1.77,
+      "no": 2.17
+     }
+    },
+    "bet365": {
+     "1X2": {
+      "home": 2.27,
+      "draw": 3.47,
+      "away": 3.16
+     },
+     "OU2.5": {
+      "over": 1.86,
+      "under": 1.97
+     },
+     "BTTS": {
+      "yes": 1.77,
+      "no": 2.08
+     }
+    }
+   }
+  }
+ ]
+}

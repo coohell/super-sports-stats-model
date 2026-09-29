@@ -1,219 +1,89 @@
-# 🏆 Super Sports Stats Model
+# Super Sports Stats Model
 
-> AI 기반 스포츠 경기 분석 & 예측 시스템  
-> 뉴스 수집 + 통계 분석 + Monte Carlo 시뮬레이션 + LLM 인사이트
+bet365 에서 걸 수 있는 마켓(1X2, 오버/언더 2.5, 양팀득점) 중 **기대값(EV)이 가장 높은 단식·조합**을 찾는 도구입니다.
 
----
-
-## 🎬 영상 기반 업그레이드
-
-유튜브에서 본 **"AI 스포츠 토토 예측"** 영상을 바탕으로, 더 발전된 모듈로 재구성한 프로젝트입니다.
-
-### 기존 vs 개선
-
-| 기능 | 영상 버전 | 이 프로젝트 |
-|------|----------|------------|
-| 뉴스 수집 | 수동 클로드 검색 | **자동 다국어 뉴스 크롤링** |
-| 배당률 | 단일 소스 | **다중 북메이커 비교 + 가치 배팅 탐지** |
-| 예측 방식 | 단일 추론 | **Monte Carlo 1000회 시뮬레이션** |
-| 전략 | 3가지 고정 | **Kelly Criterion + 자동 자금 관리** |
-| 분석 | 텍스트 기반 | **LLM 기반 인사이트 리포트** |
-| 몰빵 방지 | 수동 | **자동 분산 + 한 경기당 픽 제한** |
-
----
-
-## 🏗️ 아키텍처
+## 어떻게 찾나
 
 ```
-super-sports-stats-model/
-├── src/
-│   ├── collectors/          # 데이터 수집
-│   │   ├── news_scraper.py       # 네이버/구글 뉴스
-│   │   └── odds_collector.py     # 배당률 수집 + 가치 배팅
-│   ├── engine/              # 분석 엔진
-│   │   ├── simulator.py          # Monte Carlo (Poisson 기반)
-│   │   └── strategy.py           # 신중/적정/공격 + Kelly
-│   ├── llm/                 # AI 분석
-│   │   └── match_analyzer.py     # Claude/GPT 경기 분석
-│   └── main.py              # 메인 파이프라인
-├── config/
-│   └── settings.yaml        # 설정 파일
-├── data/                    # SQLite DB + 결과
-├── notebooks/               # 탐색적 분석
-└── requirements.txt
+경기·배당 수집 ─┬─ bet365 배당 (걸 가격)
+ (API-Football)  └─ Pinnacle 배당 → 마진 제거 → 샤프 공정 확률
+과거 결과 ────────→ Dixon-Coles 팀 전력 모델 → 모델 확률
+                        │
+ 공정 확률 = 0.8 × 샤프 + 0.2 × 모델
+                        │
+ bet365 배당 × 공정 확률 − 1 ≥ 문턱  →  +EV 선택지
+                        │
+ 조합(서로 다른 경기) 전부 계산 → 켈리 로그 성장률 순 정렬 → 최강 조합
 ```
 
----
+- **샤프 공정 확률**: Pinnacle 은 마진이 낮고 정확한 배당으로 알려져 있습니다. 마진은 롱샷 편향을 반영하는 power 방식으로 제거합니다(`sssm/odds.py`).
+- **팀 전력 모델**: Dixon-Coles(공격/수비/홈 이점/저득점 보정, 최근 경기 가중)입니다(`sssm/model/`). Pinnacle 배당이 없는 경기는 모델만으로 평가하되 EV 10% 이상을 요구합니다.
+- **최강 조합**: 조합 EV 는 폴이 늘수록 커 보이지만 적중 확률이 곱으로 줄어듭니다. 그래서 EV 가 아니라 **기대 로그 성장률**(켈리 기준)로 단식과 조합을 같은 잣대로 비교합니다. 같은 경기에서 두 폴을 고르지 않고, 경기끼리 독립을 가정합니다(`sssm/parlay.py`).
 
-## 🚀 설치
+## 빠른 시작
 
 ```bash
-git clone <repo>
-cd super-sports-stats-model
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
+python -m pytest -q
 
-# LLM 사용시 API 키 설정
-echo "ANTHROPIC_API_KEY=your_key" > .env
-# 또는
-echo "OPENAI_API_KEY=your_key" > .env
+python -m sssm picks                     # 내장 예시 배당으로 전체 파이프라인 체험
+python -m sssm backtest --start 2022-08-01
+python -m sssm ratings
+streamlit run webapp/app.py              # 대시보드
 ```
 
----
+`picks --source demo` 의 배당은 모델에서 만든 **예시**이며 실제 가격이 아닙니다.
 
-## 📊 사용법
-
-### 기본 분석
+### 실제 배당으로 돌리기
 
 ```bash
-python src/main.py --home "Korea" --away "Mexico" --league "World Cup"
+cp .env.example .env        # API_FOOTBALL_KEY 입력
+python -m sssm picks --source apifootball --league 39 --season 2025 --days 3
 ```
 
-### 옵션
+API-Football 은 bet365 와 Pinnacle 배당을 모두 주고 BTTS 도 있습니다(무료 100회/일). TheOddsAPI 의 bet365 는 **호주 지역 `bet365_au` 유료 플랜, AFL/NRL 만** 지원하므로(`--source theodds --sport aussierules_afl`) 축구 bet365 에는 쓸 수 없습니다.
+
+## 검증 결과 (내장 EPL 2021-25, walk-forward)
+
+매주 그 주 이전 경기만으로 다시 학습해 1,134경기를 예측했습니다(로그 손실, 낮을수록 좋음).
+
+| 마켓 | 모델 | 빈도 기준선 |
+|---|---|---|
+| 1X2 | **0.9785** | 1.0630 |
+| 오버/언더 2.5 | 0.6775 | 0.6834 |
+| BTTS | 0.6950 | 0.6931 |
+
+- 승무패는 기준선보다 확실히 낫지만, 오버/언더와 BTTS 는 기준선과 사실상 같습니다. 그래서 이 마켓들의 가격은 **Pinnacle 에 크게 의존**합니다.
+- **아직 증명되지 않은 것**: bet365 에 실제로 걸었을 때 수익이 나는지(ROI)와 Pinnacle 마감 배당 대비 CLV. 이 개발 환경에서는 과거 배당 다운로드가 막혀 있어 계산하지 못했습니다. 아래 방법으로 직접 확인할 수 있습니다.
+
+### 배당 백테스트 (ROI / CLV)
+
+[football-data.co.uk](https://www.football-data.co.uk/englandm.php) 에서 시즌별 CSV(`E0.csv`)를 받아 넣으면 됩니다. `B365*`, `PS*`(Pinnacle), `PSC*`(Pinnacle 마감) 컬럼을 자동으로 읽습니다.
 
 ```bash
-python src/main.py \
-  --home "Manchester City" \
-  --away "Arsenal" \
-  --league "Premier League" \
-  --bankroll 500000 \
-  --api-key "your_api_football_key"
+python -m sssm backtest --csv E0_2223.csv E0_2324.csv E0_2425.csv --start 2023-08-01
 ```
 
----
+결과에는 전략별(샤프+모델 / 샤프만 / 모델만) 배팅 수, 적중률, ROI, 평균 CLV 와 로그 손실이 가장 낮은 `sharp_weight` 가 나옵니다. **CLV 가 양수이고 ROI 가 수백 건 이상에서 양수일 때만** 이 전략을 믿으세요.
 
-## 🧠 핵심 모듈 설명
-
-### 1. Monte Carlo 시뮬레이터 (`engine/simulator.py`)
-
-- **Poisson 분포** 기반 득점 시뮬레이션
-- 홈 어드밴티지, 폼, 점유율 반영
-- 1000회+ 반복으로 확률 분포 생성
-- 신뢰구간 계산
-
-### 2. 전략 엔진 (`engine/strategy.py`)
-
-| 전략 | 특징 | 배팅 비중 |
-|------|------|----------|
-| **신중** | 확률 55%+, 배당 2.5 이하 | 총자본 3% |
-| **적정** | 확률 42%+, 배당 4.0 이하 | 총자본 5% |
-| **공격** | 확률 30%+, 배당 15 이하 | 총자본 8% |
-
-- **Kelly Criterion** 적용 (fractional 0.25)
-- **몰빵 방지**: 한 경기당 최대 1픽, 총 자본 20% 초과 시 자동 조정
-
-### 3. 배당률 분석 (`collectors/odds_collector.py`)
-
-- 다중 북메이커 배당률 비교
-- **Implied Probability** → Vig 제거
-- **Value Bet** 탐지 (모델 확률 > 배당률 암시확률 + 5%)
-
-### 4. LLM 인사이트 (`llm/match_analyzer.py`)
-
-- 뉴스 + 통계 + 시뮬레이션 결과 종합
-- Claude 3 Sonnet 또는 GPT-4o 활용
-- 핵심 요약 / 강약점 / 결정적 변수 / 최종 예측
-
----
-
-## 📈 예측 파이프라인
+## 구조
 
 ```
-[경기 입력]
-     ↓
-[뉴스 수집] ──→ [LLM 요약]
-     ↓
-[통계 로드] ──→ [특성 엔지니어링]
-     ↓
-[Monte Carlo] ──→ [확률 분포]
-     ↓
-[배당률 비교] ──→ [Value Bet 탐지]
-     ↓
-[전략 엔진] ──→ [신중/적정/공격 픽 생성]
-     ↓
-[리스크 관리] ──→ [몰빵 방지 + Kelly 조정]
-     ↓
-[최종 리포트] ──→ [JSON 저장 + 콘솔 출력]
+sssm/
+  odds.py       마진 제거(proportional/power/shin), EV, 켈리
+  model/        Dixon-Coles 팀 전력 모델
+  pricing.py    공정 확률 블렌딩 + 가치 선택지 필터
+  parlay.py     조합 생성, 켈리 로그 성장률 정렬
+  backtest.py   walk-forward 백테스트, ROI/CLV
+  sources/      API-Football, TheOddsAPI 어댑터
+  pipeline.py   전체 연결
+  cli.py        python -m sssm ...
+webapp/app.py   Streamlit 대시보드
+data/           EPL 2021-25 결과, 예시 경기·배당
+tests/          pytest (배당 수학, 모델, 조합, 어댑터, 백테스트)
+docs/           이전 조사 보고서
 ```
 
----
+## 주의
 
-## ⚠️ 중요 안내
-
-이 프로젝트는 **데이터 분석 및 예측 연구 목적**입니다.
-
-- ❌ 자동 배팅/자동 거래 기능 **없음**
-- ❌ 배팅 사이트 API 연동 **없음**
-- ✅ 데이터 분석 / 확률 모델링 / 리서치 도구
-
-스포츠토토는 과도한 이용은 건강에 해롭습니다. 소액으로 재미삼아 이용하세요.
-
----
-
-## 🛠️ 확장 계획
-
-- [ ] API-Football 연동 (실시간 데이터)
-- [ ] Flashscore 스크래퍼 통합
-- [ ] Streamlit 웹 대시보드
-- [ ] 텔레그램/디스코드 알림 봇
-- [ ] 과거 결과 백테스팅 프레임워크
-
----
-
-## 📄 라이선스
-
-MIT License
-
-
----
-
-## 🌐 웹사이트
-
-Streamlit 기반 웹사이트 포함.
-
-| 페이지 | 기능 |
-|--------|------|
-| **🏠 홈** | 한 경기 입력 → 필살승부 + Kelly 비율 + 3전략 |
-| **📊 상세 분석** | 여러 경기 CSV 입력 → 전체 비교 + TOP 3 |
-| **📄 보고서** | PDF 다운로드 + 요약 수치 |
-
-```bash
-cd webapp
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## 🚀 배포 (Oracle Cloud / Ubuntu)
-
-```bash
-# 서버에서 한 줄 실행
-curl -sSL https://raw.githubusercontent.com/coohell/super-sports-stats-model/main/deploy.sh | bash
-```
-
-자동으로 설치:
-- Python 가상환경
-- Streamlit (포트 80)
-- systemd 서비스 (재부팅 자동 실행)
-- Nginx 리버스 프록시
-
-업데이트:
-```bash
-cd ~/super-sports-stats-model
-git pull origin main
-sudo systemctl restart super-sports-stats
-```
-
-## 🤖 텔레그램 봇
-
-```bash
-export TELEGRAM_BOT_TOKEN='your_token'
-python3 telegram_bot/bot.py
-```
-
-**명령어:**
-- `/killpick 홈팀 원정팀 홈배당 무배당 원정배당` — 필살승부
-- `/analyze` — 상세 분석
-- `/strategies` — 3가지 전략
-
----
-
-GitHub: https://github.com/coohell/super-sports-stats-model
+분석 연구용입니다. 자동 배팅 기능은 없고 수익을 보장하지 않습니다. 배당에 마진이 있으므로 대부분의 선택지는 −EV 이며, 모델 확률의 오차가 EV 보다 클 수 있습니다. 감당 가능한 소액으로만 이용하세요.
