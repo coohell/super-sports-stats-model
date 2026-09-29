@@ -34,7 +34,7 @@ python -c "import numpy, scipy, pandas, requests" 2>/dev/null || pip install -q 
 
 leagues="${SSSM_LEAGUES:-39 140 78 135 61}"
 # shellcheck disable=SC2086
-common=(--source apifootball --league $leagues --days 2 --bankroll "${SSSM_BANKROLL:-1000000}")
+common=(--source apifootball --league $leagues --days 1 --bankroll "${SSSM_BANKROLL:-1000000}")
 
 case "$mode" in
   picks)
