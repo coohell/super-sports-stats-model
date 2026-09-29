@@ -16,6 +16,8 @@ import pandas as pd
 from scipy.optimize import minimize
 from scipy.stats import poisson
 
+from .. import markets
+
 MAX_GOALS = 10
 
 
@@ -28,27 +30,42 @@ def _tau_matrix(lam: float, mu: float, rho: float, n: int = MAX_GOALS + 1) -> np
     return t
 
 
-def market_probs(score: np.ndarray) -> Dict[str, Dict[str, float]]:
-    """득점 확률 행렬 score[h, a] 에서 마켓별 확률을 뽑는다."""
+STANDARD_MARKETS = ("1X2", "OU:2.5", "BTTS")
+
+
+def market_prob(score: np.ndarray, market: str) -> Optional[Dict[str, float]]:
+    """득점 확률 행렬 score[h, a] 에서 한 마켓의 결과 확률을 뽑는다. 지원하지 않으면 None."""
+    kind, line = markets.split(market)
     n = score.shape[0]
     h, a = np.indices((n, n))
-    total = h + a
-    home = float(score[h > a].sum())
-    draw = float(np.trace(score))
-    away = float(score[h < a].sum())
-    over = float(score[total > 2.5].sum())
-    btts = float(score[(h > 0) & (a > 0)].sum())
-    return {
-        "1X2": {"home": home, "draw": draw, "away": away},
-        "OU2.5": {"over": over, "under": 1.0 - over},
-        "BTTS": {"yes": btts, "no": 1.0 - btts},
-    }
+    if kind == "1X2":
+        home, draw = float(score[h > a].sum()), float(np.trace(score))
+        return {"home": home, "draw": draw, "away": 1.0 - home - draw}
+    if kind == "BTTS":
+        yes = float(score[(h > 0) & (a > 0)].sum())
+        return {"yes": yes, "no": 1.0 - yes}
+    if kind == "OU" and line is not None and markets.is_half_line(line):
+        over = float(score[(h + a) > line].sum())
+        return {"over": over, "under": 1.0 - over}
+    if kind == "AH" and line is not None and markets.is_half_line(line):
+        home = float(score[(h - a + line) > 0].sum())  # line 은 홈 기준 핸디캡
+        return {"home": home, "away": 1.0 - home}
+    return None
+
+
+def market_probs(score: np.ndarray, wanted=STANDARD_MARKETS) -> Dict[str, Dict[str, float]]:
+    out = {}
+    for m in wanted:
+        p = market_prob(score, m)
+        if p is not None:
+            out[m] = p
+    return out
 
 
 @dataclass
 class DixonColes:
-    xi: float = 0.0019  # 일 단위 시간 감쇠. 0.0019 ≈ 반감기 1년
-    ridge: float = 0.01  # 경기 수가 적은 팀(승격팀)의 과적합 방지
+    xi: float = 0.003  # 일 단위 시간 감쇠. 0.003 ≈ 반감기 231일 (EPL 2022-25 그리드에서 0.003~0.004 가 최적)
+    ridge: float = 0.03  # 경기 수가 적은 팀(승격팀)의 과적합 방지
 
     teams_: Optional[list] = None
     attack_: Optional[np.ndarray] = None
@@ -145,10 +162,11 @@ class DixonColes:
         m = np.outer(poisson.pmf(g, lam), poisson.pmf(g, mu)) * _tau_matrix(lam, mu, self.rho_)
         return m / m.sum()
 
-    def predict(self, home: str, away: str) -> Optional[Dict[str, Dict[str, float]]]:
+    def predict(self, home: str, away: str, wanted=STANDARD_MARKETS) -> Optional[Dict[str, Dict[str, float]]]:
+        """{마켓: {결과: 확률}}. 학습하지 않은 팀(승격팀 등)이 있으면 None."""
         if not (self.knows(home) and self.knows(away)):
             return None
-        return market_probs(self.score_matrix(home, away))
+        return market_probs(self.score_matrix(home, away), wanted)
 
     def ratings(self) -> pd.DataFrame:
         return (

@@ -1,9 +1,9 @@
 """명령줄 진입점: python -m sssm <명령>
 
   picks     오늘의 +EV 선택지와 최강 조합
-  fetch-history  EPL 과거 결과+bet365/Pinnacle 배당 받기 (data/history/)
   backtest  과거 데이터로 모델/전략 검증
   ratings   팀 전력 순위
+  fetch-history  시즌 CSV(결과+bet365/Pinnacle 시가·마감 배당) 내려받기
 """
 from __future__ import annotations
 
@@ -40,24 +40,30 @@ def main(argv=None) -> None:
     pk.add_argument("--season", type=int, default=2025)
     pk.add_argument("--days", type=int, default=3)
     pk.add_argument("--sport", default="aussierules_afl", help="TheOddsAPI 종목 키")
+    pk.add_argument("--markets", default="h2h,spreads,totals",
+                    help="TheOddsAPI 마켓 (h2h,spreads,totals,btts). btts 는 경기당 크레딧을 씁니다")
     pk.add_argument("--min-ev", type=float, default=0.02)
     pk.add_argument("--sharp-weight", type=float, default=0.8)
     pk.add_argument("--max-legs", type=int, default=3)
     pk.add_argument("--kelly", type=float, default=0.25, help="켈리 분수 (0.25 = 1/4 켈리)")
     pk.add_argument("--out", type=Path, default=ROOT / "reports" / "latest.json")
 
-    fh = sub.add_parser("fetch-history", help="EPL 과거 결과와 배당을 data/history/ 에 받기")
-    fh.add_argument("--first-season", default="1516", help="받을 첫 시즌 코드 (예: 1516)")
-
     bt = sub.add_parser("backtest", help="walk-forward 백테스트")
     bt.add_argument("--csv", type=Path, nargs="*",
-                    help="결과/배당 CSV (기본: data/history/ 가 있으면 그것, 없으면 내장 EPL 2021-25 결과)")
+                    help="결과/배당 CSV (기본: data/history/ 에 받은 CSV, 없으면 내장 EPL 2015-25 결과)")
     bt.add_argument("--start", help="검증 시작일 (YYYY-MM-DD)")
     bt.add_argument("--sharp-weight", type=float, default=0.8)
     bt.add_argument("--min-ev", type=float, default=0.02)
 
     rt = sub.add_parser("ratings", help="팀 전력 순위")
     rt.add_argument("--csv", type=Path, nargs="*")
+
+    fh = sub.add_parser("fetch-history", help="시즌 CSV 내려받기 (football-data.co.uk 또는 GitHub 미러)")
+    fh.add_argument("--source", choices=["football-data", "mirror"], default="football-data",
+                    help="mirror: football-data.co.uk 가 막혔을 때 GitHub 미러(EPL 만)에서 받기")
+    fh.add_argument("--league", default="E0", help="E0=EPL, E1=챔피언십, SP1=라리가, D1=분데스, I1=세리에A, F1=리그1")
+    fh.add_argument("--seasons", nargs="+", default=["2122", "2223", "2324", "2425"], help='"2425" = 2024/25')
+    fh.add_argument("--out", type=Path, default=ROOT / "data" / "history")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -75,17 +81,23 @@ def main(argv=None) -> None:
         elif a.source == "apifootball":
             rep = pipeline.run_apifootball(a.league, a.season, a.days, st)
         else:
-            rep = pipeline.run_theoddsapi(a.sport, st)
+            rep = pipeline.run_theoddsapi(a.sport, st, tuple(a.markets.split(",")))
         _print_report(rep)
         print(f"\n저장: {rep.save(a.out)}")
-    elif a.cmd == "fetch-history":
-        paths = history.fetch_epl(first_season=a.first_season)
-        print(f"{len(paths)}개 시즌 저장: {paths[0].parent} ({paths[0].name} ~ {paths[-1].name})")
     elif a.cmd == "backtest":
         df = history.load(a.csv or history.history_files() or history.DEFAULT_RESULTS)
         print(backtest.run(df, a.start, sharp_weight=a.sharp_weight, min_ev=a.min_ev).to_text())
         if not history.has_odds(df):
             print("\n배당 컬럼이 없어 ROI 는 계산하지 않았습니다. `python -m sssm fetch-history` 로 배당을 받으면 계산합니다.")
+    elif a.cmd == "fetch-history":
+        if a.source == "mirror":
+            if a.league != "E0":
+                ap.error("미러는 EPL(E0)만 있습니다")
+            paths = history.download_mirror(a.seasons, a.out)
+        else:
+            paths = history.download(a.league, a.seasons, a.out)
+        for p in paths:
+            print("저장:", p)
     elif a.cmd == "ratings":
         from .model import DixonColes
 

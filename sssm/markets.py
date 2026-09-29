@@ -1,28 +1,71 @@
-"""마켓/선택지 공통 자료형."""
+"""마켓/선택지 공통 자료형.
+
+마켓 키 규칙 (라인이 있는 마켓은 "종류:라인"):
+  1X2      승무패 (home/draw/away)
+  H2H      무승부 없는 종목의 승패 (home/away)
+  BTTS     양팀 득점 (yes/no)
+  OU:2.5   총득점 오버/언더 (over/under). 라인은 x.5 만 지원(푸시가 없어야 함)
+  AH:-1.5  홈 기준 아시안 핸디캡 (home/away). 라인은 x.5 만 지원
+한 마켓의 결과들은 서로 배타적이며 확률의 합이 1이다.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
-# 지원 마켓과 그 결과들. 한 마켓의 결과들은 서로 배타적이며 합이 1이다.
-MARKETS: Dict[str, tuple] = {
+OUTCOMES: Dict[str, Tuple[str, ...]] = {
     "1X2": ("home", "draw", "away"),
-    "H2H": ("home", "away"),  # 무승부 없는 종목의 승패
-    "OU2.5": ("over", "under"),
+    "H2H": ("home", "away"),
     "BTTS": ("yes", "no"),
+    "OU": ("over", "under"),
+    "AH": ("home", "away"),
+}
+LINE_KINDS = ("OU", "AH")
+
+_LABELS = {
+    "1X2": {"home": "홈승", "draw": "무", "away": "원정승"},
+    "H2H": {"home": "홈승", "away": "원정승"},
+    "BTTS": {"yes": "양팀득점 O", "no": "양팀득점 X"},
 }
 
-LABELS = {
-    ("1X2", "home"): "홈승",
-    ("1X2", "draw"): "무",
-    ("1X2", "away"): "원정승",
-    ("H2H", "home"): "홈승",
-    ("H2H", "away"): "원정승",
-    ("OU2.5", "over"): "오버 2.5",
-    ("OU2.5", "under"): "언더 2.5",
-    ("BTTS", "yes"): "양팀득점 O",
-    ("BTTS", "no"): "양팀득점 X",
-}
+
+def is_half_line(line: float) -> bool:
+    return abs((line * 2) % 2 - 1) < 1e-9
+
+
+def make(kind: str, line: Optional[float] = None) -> str:
+    return kind if line is None else f"{kind}:{line:g}"
+
+
+def split(market: str) -> Tuple[str, Optional[float]]:
+    kind, _, rest = market.partition(":")
+    return kind, (float(rest) if rest else None)
+
+
+def is_supported(market: str) -> bool:
+    try:
+        kind, line = split(market)
+    except ValueError:
+        return False
+    if kind not in OUTCOMES:
+        return False
+    if kind in LINE_KINDS:
+        return line is not None and is_half_line(line)
+    return line is None
+
+
+def outcomes(market: str) -> Tuple[str, ...]:
+    return OUTCOMES[split(market)[0]]
+
+
+def label(market: str, outcome: str) -> str:
+    kind, line = split(market)
+    if kind == "OU":
+        return f"{'오버' if outcome == 'over' else '언더'} {line:g}"
+    if kind == "AH":
+        h = line if outcome == "home" else -line
+        return f"{'홈' if outcome == 'home' else '원정'} {h:+g}"
+    return _LABELS[kind][outcome]
 
 
 @dataclass
@@ -41,7 +84,7 @@ class Fixture:
 
     def market(self, book: str, market: str) -> Optional[Dict[str, float]]:
         m = self.odds.get(book, {}).get(market)
-        if not m or set(m) != set(MARKETS[market]):
+        if not m or set(m) != set(outcomes(market)):
             return None
         if any(v is None or v <= 1.0 for v in m.values()):
             return None
@@ -71,7 +114,7 @@ class Selection:
 
     @property
     def label(self) -> str:
-        return LABELS.get((self.market, self.outcome), f"{self.market} {self.outcome}")
+        return label(self.market, self.outcome)
 
     @property
     def match(self) -> str:

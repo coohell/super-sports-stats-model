@@ -9,7 +9,7 @@ class FixedModel:
     def __init__(self, probs):
         self.probs = probs
 
-    def predict(self, home, away):
+    def predict(self, home, away, wanted=None):
         return self.probs
 
 

@@ -6,10 +6,10 @@
    (B365H/D/A, B365CH/CD/CA, PSH/D/A, PSCH/D/A, B365>2.5, B365C>2.5, P>2.5, PC>2.5 ...)
    https://www.football-data.co.uk/englandm.php 에서 시즌별 CSV 를 받을 수 있다.
 
-football-data.co.uk 가 막힌 환경에서는 `fetch_epl()` 이 같은 데이터를 정리해 둔
-GitHub 미러(AnishKhetani/premier-league-data)에서 받아 football-data 형식으로 바꿔
-저장한다. 원 데이터의 권리는 football-data.co.uk 에 있으므로 저장소에는 넣지 않는다
-(data/history/ 는 .gitignore).
+football-data.co.uk 가 막힌 환경에서는 `download_mirror()` 가 같은 데이터를 정리해 둔
+GitHub 미러(AnishKhetani/premier-league-data, EPL 만)에서 받아 football-data 형식으로
+바꿔 저장한다. 원 데이터의 권리는 football-data.co.uk 에 있으므로 저장소에는 넣지 않는다
+(data/history/*.csv 는 .gitignore).
 """
 from __future__ import annotations
 
@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Union
 
 import pandas as pd
+import requests
 
 from .config import ROOT
+from .sources import check
 
-DEFAULT_RESULTS = ROOT / "data" / "epl_results_2021_2025.csv"
+DEFAULT_RESULTS = ROOT / "data" / "epl_results_2015_2025.csv"
 HISTORY_DIR = ROOT / "data" / "history"
-MIRROR = "https://raw.githubusercontent.com/AnishKhetani/premier-league-data/main/data/processed"
+MIRROR_URL = "https://raw.githubusercontent.com/AnishKhetani/premier-league-data/main/data/processed"
 
 ODDS_COLUMNS = {
     "B365H": ("bet365", "1X2", "home"), "B365D": ("bet365", "1X2", "draw"), "B365A": ("bet365", "1X2", "away"),
@@ -31,10 +33,10 @@ ODDS_COLUMNS = {
     "PSH": ("pinnacle", "1X2", "home"), "PSD": ("pinnacle", "1X2", "draw"), "PSA": ("pinnacle", "1X2", "away"),
     "PSCH": ("pinnacle_close", "1X2", "home"), "PSCD": ("pinnacle_close", "1X2", "draw"),
     "PSCA": ("pinnacle_close", "1X2", "away"),
-    "B365>2.5": ("bet365", "OU2.5", "over"), "B365<2.5": ("bet365", "OU2.5", "under"),
-    "B365C>2.5": ("bet365_close", "OU2.5", "over"), "B365C<2.5": ("bet365_close", "OU2.5", "under"),
-    "P>2.5": ("pinnacle", "OU2.5", "over"), "P<2.5": ("pinnacle", "OU2.5", "under"),
-    "PC>2.5": ("pinnacle_close", "OU2.5", "over"), "PC<2.5": ("pinnacle_close", "OU2.5", "under"),
+    "B365>2.5": ("bet365", "OU:2.5", "over"), "B365<2.5": ("bet365", "OU:2.5", "under"),
+    "B365C>2.5": ("bet365_close", "OU:2.5", "over"), "B365C<2.5": ("bet365_close", "OU:2.5", "under"),
+    "P>2.5": ("pinnacle", "OU:2.5", "over"), "P<2.5": ("pinnacle", "OU:2.5", "under"),
+    "PC>2.5": ("pinnacle_close", "OU:2.5", "over"), "PC<2.5": ("pinnacle_close", "OU:2.5", "under"),
 }
 
 
@@ -65,6 +67,29 @@ def has_odds(df: pd.DataFrame) -> bool:
     return {"B365H", "PSH"}.issubset(df.columns)
 
 
+FOOTBALL_DATA_URL = "https://www.football-data.co.uk/mmz4281/{season}/{league}.csv"
+
+
+def download(league: str = "E0", seasons: Iterable[str] = ("2122", "2223", "2324", "2425"),
+             out: Path = HISTORY_DIR, session: Optional[requests.Session] = None) -> List[Path]:
+    """football-data.co.uk 에서 시즌별 결과+배당 CSV 를 받는다.
+
+    league: E0=EPL, E1=챔피언십, SP1=라리가, D1=분데스, I1=세리에A, F1=리그1
+    seasons: "2425" = 2024/25 시즌. 사내 프록시 등에서 사이트가 막혀 있으면 로컬 PC 에서 실행하거나 CSV 를 직접 넣는다.
+    """
+    http = session or requests.Session()
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for season in seasons:
+        r = http.get(FOOTBALL_DATA_URL.format(season=season, league=league), timeout=30)
+        check(r, "football-data.co.uk")
+        path = out / f"{league}_{season}.csv"
+        path.write_bytes(r.content)
+        paths.append(path)
+    return paths
+
+
 # 미러 컬럼 -> football-data 컬럼
 _MIRROR_COLUMNS = {
     "bet365_1x2_home": "B365H", "bet365_1x2_draw": "B365D", "bet365_1x2_away": "B365A",
@@ -89,31 +114,31 @@ def from_mirror(results: pd.DataFrame, odds: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def fetch_epl(dest: Path = HISTORY_DIR, first_season: str = "1516", base_url: str = MIRROR,
-              timeout: float = 60.0) -> List[Path]:
-    """EPL 결과+배당을 받아 dest/E0_<시즌>.csv 로 저장하고 경로들을 돌려준다."""
+def download_mirror(seasons: Iterable[str], out: Path = HISTORY_DIR, session: Optional[requests.Session] = None,
+                    base_url: str = MIRROR_URL) -> List[Path]:
+    """GitHub 미러에서 EPL 결과+배당을 받아 out/E0_<시즌>.csv (football-data 형식) 로 저장한다."""
     import io
 
-    import requests
+    http = session or requests.Session()
 
     def get(name: str) -> pd.DataFrame:
-        r = requests.get(f"{base_url}/{name}", timeout=timeout)
-        r.raise_for_status()
+        r = http.get(f"{base_url}/{name}", timeout=60)
+        check(r, "GitHub 미러")
         return pd.read_csv(io.StringIO(r.text), low_memory=False)
 
     df = from_mirror(get("results.csv"), get("results_with_odds.csv"))
-    # 시즌 코드 "9394" 처럼 두 자리 연도라 정렬용으로 네 자리 시작 연도를 만든다
-    start_year = df["Season"].str[:2].astype(int).map(lambda y: 1900 + y if y >= 90 else 2000 + y)
-    fy = int(first_season[:2])
-    df = df[start_year >= (1900 + fy if fy >= 90 else 2000 + fy)]
-    dest.mkdir(parents=True, exist_ok=True)
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
     paths = []
-    for season, g in df.groupby("Season", sort=True):
-        p = dest / f"E0_{season}.csv"
-        g.drop(columns="Season").to_csv(p, index=False)
-        paths.append(p)
+    for season in seasons:
+        g = df[df["Season"] == season]
+        if g.empty:
+            raise ValueError(f"미러에 {season} 시즌이 없습니다")
+        path = out / f"E0_{season}.csv"
+        g.drop(columns="Season").to_csv(path, index=False)
+        paths.append(path)
     return paths
 
 
-def history_files(dest: Path = HISTORY_DIR) -> List[Path]:
-    return sorted(dest.glob("E0_*.csv"))
+def history_files(out: Path = HISTORY_DIR) -> List[Path]:
+    return sorted(Path(out).glob("E0_*.csv"))
