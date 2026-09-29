@@ -3,6 +3,7 @@
   picks     오늘의 +EV 선택지와 최강 조합
   backtest  과거 데이터로 모델/전략 검증
   ratings   팀 전력 순위
+  fetch-history  football-data.co.uk 시즌 CSV(결과+bet365/Pinnacle 배당) 내려받기
 """
 from __future__ import annotations
 
@@ -39,6 +40,8 @@ def main(argv=None) -> None:
     pk.add_argument("--season", type=int, default=2025)
     pk.add_argument("--days", type=int, default=3)
     pk.add_argument("--sport", default="aussierules_afl", help="TheOddsAPI 종목 키")
+    pk.add_argument("--markets", default="h2h,spreads,totals",
+                    help="TheOddsAPI 마켓 (h2h,spreads,totals,btts). btts 는 경기당 크레딧을 씁니다")
     pk.add_argument("--min-ev", type=float, default=0.02)
     pk.add_argument("--sharp-weight", type=float, default=0.8)
     pk.add_argument("--max-legs", type=int, default=3)
@@ -46,13 +49,18 @@ def main(argv=None) -> None:
     pk.add_argument("--out", type=Path, default=ROOT / "reports" / "latest.json")
 
     bt = sub.add_parser("backtest", help="walk-forward 백테스트")
-    bt.add_argument("--csv", type=Path, nargs="*", help="결과/배당 CSV (기본: 내장 EPL 2021-25 결과)")
+    bt.add_argument("--csv", type=Path, nargs="*", help="결과/배당 CSV (기본: 내장 EPL 2015-25 결과)")
     bt.add_argument("--start", help="검증 시작일 (YYYY-MM-DD)")
     bt.add_argument("--sharp-weight", type=float, default=0.8)
     bt.add_argument("--min-ev", type=float, default=0.02)
 
     rt = sub.add_parser("ratings", help="팀 전력 순위")
     rt.add_argument("--csv", type=Path, nargs="*")
+
+    fh = sub.add_parser("fetch-history", help="football-data.co.uk 시즌 CSV 내려받기")
+    fh.add_argument("--league", default="E0", help="E0=EPL, E1=챔피언십, SP1=라리가, D1=분데스, I1=세리에A, F1=리그1")
+    fh.add_argument("--seasons", nargs="+", default=["2122", "2223", "2324", "2425"], help='"2425" = 2024/25')
+    fh.add_argument("--out", type=Path, default=ROOT / "data" / "history")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -70,7 +78,7 @@ def main(argv=None) -> None:
         elif a.source == "apifootball":
             rep = pipeline.run_apifootball(a.league, a.season, a.days, st)
         else:
-            rep = pipeline.run_theoddsapi(a.sport, st)
+            rep = pipeline.run_theoddsapi(a.sport, st, tuple(a.markets.split(",")))
         _print_report(rep)
         print(f"\n저장: {rep.save(a.out)}")
     elif a.cmd == "backtest":
@@ -78,6 +86,9 @@ def main(argv=None) -> None:
         print(backtest.run(df, a.start, sharp_weight=a.sharp_weight, min_ev=a.min_ev).to_text())
         if not history.has_odds(df):
             print("\n배당 컬럼이 없어 ROI 는 계산하지 않았습니다. football-data.co.uk 시즌 CSV 를 --csv 로 넣으면 계산합니다.")
+    elif a.cmd == "fetch-history":
+        for p in history.download(a.league, a.seasons, a.out):
+            print("저장:", p)
     elif a.cmd == "ratings":
         from .model import DixonColes
 

@@ -33,6 +33,7 @@ def test_betting_simulation_with_odds(synthetic_league, tmp_path):
 
 def test_demo_pipeline_and_cli(tmp_path, capsys):
     rep = pipeline.run_file()
+    assert {"1X2", "OU:2.5", "BTTS"} <= {s.market for s in rep.selections}  # 예시 파일의 마켓 키가 지원 목록과 맞아야 한다
     assert rep.value and rep.parlays
     assert all(s.ev >= 0.02 for s in rep.value)
     out = tmp_path / "r.json"
@@ -40,3 +41,26 @@ def test_demo_pipeline_and_cli(tmp_path, capsys):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["parlays"] and data["notes"]
     assert "최강 조합" in capsys.readouterr().out
+
+
+def test_download_history_writes_files_and_hides_nothing_on_error(tmp_path):
+    class Resp:
+        def __init__(self, status, content=b""):
+            self.status_code, self.content, self.text = status, content, content.decode()
+
+    class Sess:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, timeout=None):
+            self.urls.append(url)
+            return Resp(200, b"Date,HomeTeam\n") if "2425" in url else Resp(404, b"not found")
+
+    s = Sess()
+    paths = history.download("E0", ["2425"], tmp_path, s)
+    assert s.urls == ["https://www.football-data.co.uk/mmz4281/2425/E0.csv"]
+    assert paths == [tmp_path / "E0_2425.csv"] and paths[0].read_bytes().startswith(b"Date")
+    import pytest
+
+    with pytest.raises(RuntimeError, match="404"):
+        history.download("E0", ["9999"], tmp_path, s)
