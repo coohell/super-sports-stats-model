@@ -7,7 +7,7 @@
   sgp         같은 경기 조합(Bet Builder) 가격 평가
   clv         기록해 둔 추천 배팅의 CLV
   ratings     팀 전력 순위
-  fetch-history  football-data.co.uk 시즌 CSV 받기
+  fetch-history  시즌 CSV(결과+bet365/Pinnacle 시가·마감 배당) 받기
 """
 from __future__ import annotations
 
@@ -100,7 +100,9 @@ def main(argv=None) -> None:
     rt = sub.add_parser("ratings", help="팀 전력 순위")
     rt.add_argument("--csv", type=Path, nargs="*")
 
-    fh = sub.add_parser("fetch-history", help="football-data.co.uk 시즌 CSV 내려받기")
+    fh = sub.add_parser("fetch-history", help="시즌 CSV 내려받기 (football-data.co.uk 또는 GitHub 미러)")
+    fh.add_argument("--source", choices=["football-data", "mirror"], default="football-data",
+                    help="mirror: football-data.co.uk 가 막혔을 때 GitHub 미러(EPL 만)에서 받기")
     fh.add_argument("--league", default="E0", help="E0=EPL, E1=챔피언십, SP1=라리가, D1=분데스, I1=세리에A, F1=리그1")
     fh.add_argument("--seasons", nargs="+", default=["2122", "2223", "2324", "2425"], help='"2425" = 2024/25')
     fh.add_argument("--out", type=Path, default=ROOT / "data" / "history")
@@ -115,7 +117,7 @@ def main(argv=None) -> None:
         return pricing, ValueFilter(min_edge=a.min_edge), port
 
     def history_csvs(paths):
-        paths = paths or sorted((ROOT / "data" / "history").glob("*.csv"))
+        paths = paths or history.history_files()
         if not paths:
             raise SystemExit("배당 CSV 가 없습니다. --csv 로 넣거나 fetch-history 로 data/history/ 에 받으세요.")
         return history.load(paths)
@@ -192,7 +194,13 @@ def main(argv=None) -> None:
             print(f"  {r['ts'][:16]}  @{r['odds']:6.2f}  엣지 {r['edge']:+.2%}  CLV {clv:>7}  {r['picks']}")
         print(tracking.summarize_clv(rows))
     elif a.cmd == "fetch-history":
-        for p in history.download(a.league, a.seasons, a.out):
+        if a.source == "mirror":
+            if a.league != "E0":
+                ap.error("미러는 EPL(E0)만 있습니다")
+            paths = history.download_mirror(a.seasons, a.out)
+        else:
+            paths = history.download(a.league, a.seasons, a.out)
+        for p in paths:
             print("저장:", p)
     elif a.cmd == "ratings":
         from .model import DixonColes

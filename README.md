@@ -29,7 +29,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 
 python -m sssm picks                     # 내장 예시 배당으로 전체 파이프라인 체험
-python -m sssm backtest --start 2022-08-01
+python -m sssm backtest --start 2022-08-01   # 내장 결과만: 로그 손실
 python -m sssm ratings
 streamlit run webapp/app.py              # 대시보드
 ```
@@ -64,18 +64,33 @@ python -m sssm picks --source theodds --sport aussierules_afl --markets h2h,spre
 | BTTS | 0.6929 | 0.6920 |
 
 - 승무패는 기준선보다 확실히 낫고(정확도 54.0%, 홈승 확률 보정도 양호), 오버/언더는 미미하게, BTTS 는 기준선과 같습니다. 그래서 이 마켓들의 가격은 **Pinnacle 에 크게 의존**합니다.
-- **아직 증명되지 않은 것**: bet365 에 실제로 걸었을 때 수익이 나는지(ROI)와 Pinnacle 마감 배당 대비 CLV. 이 개발 환경에서는 과거 배당 다운로드가 막혀 있어 계산하지 못했습니다. 아래 방법으로 직접 확인할 수 있습니다.
 
-### 배당 백테스트 (ROI / CLV)
+## bet365 배당 백테스트 결과 (EPL 2021-22 ~ 2025-26)
 
-[football-data.co.uk](https://www.football-data.co.uk/englandm.php) 시즌 CSV 를 받아 넣으면 됩니다. `B365*`, `PS*`(Pinnacle), `PSC*`(Pinnacle 마감) 컬럼을 자동으로 읽습니다. 이 사이트가 막힌 네트워크(사내 프록시 등)라면 로컬 PC 에서 실행하세요.
+**지금 모델은 bet365 를 이길 엣지가 없습니다.** 자세한 내용은 [reports/market_backtest_epl.md](reports/market_backtest_epl.md) 에 있습니다.
+
+| | 1X2 로그 손실 | 단식 ROI (95% 구간) | CLV (Pinnacle 마감) |
+|---|---|---|---|
+| 모델 | 0.9739 | −9.0% [−16.7%, −1.3%], 1,584건 | −6.7% |
+| 샤프 0.8 + 모델 0.2 (현재 기본값) | 0.9521 | +1.8% [−17.5%, +21.1%], 313건 (운) | −4.5% |
+| Pinnacle 만 (EV≥0%) | 0.9508 | +2.7% [−30.6%, +36.0%], 93건 | +0.6% |
+| bet365 시가 자체 | 0.9511 | | |
+
+- 모델은 bet365 시가보다 부정확하고, 모델을 섞을수록 결과가 나빠집니다(최적 `sharp_weight` = 1.0).
+- 조합은 폴마다 CLV 가 음수라 손실을 키웁니다(주간 최강 3폴 40건 중 1건 적중, ROI −64%).
+- 양의 CLV 는 bet365 가 Pinnacle 보다 늦게 움직인 경우에만 보였고, 시즌당 약 19건이라 아직 엣지로 볼 수 없습니다.
+
+직접 돌리기:
 
 ```bash
-python -m sssm fetch-history --league E0 --seasons 2122 2223 2324 2425   # data/history/ 에 저장
-python -m sssm backtest --csv data/history/E0_*.csv --start 2023-08-01
+# football-data.co.uk 에 접속되면
+python -m sssm fetch-history --seasons 1516 1617 1718 1819 1920 2021 2122 2223 2324 2425 2526
+# 막혀 있으면 GitHub 미러(EPL 만)
+python -m sssm fetch-history --source mirror --seasons 1516 1617 1718 1819 1920 2021 2122 2223 2324 2425 2526
+python -m sssm backtest --start 2021-08-01   # data/history/E0_*.csv 를 자동으로 읽음
 ```
 
-결과에는 전략별(샤프+모델 / 샤프만 / 모델만) 배팅 수, 적중률, ROI, 평균 CLV 와 로그 손실이 가장 낮은 `sharp_weight` 가 나옵니다. **CLV 가 양수이고 ROI 가 수백 건 이상에서 양수일 때만** 이 전략을 믿으세요.
+`--source mirror` 는 football-data.co.uk CSV 를 정리한 GitHub 미러(AnishKhetani/premier-league-data)에서 받아 같은 형식으로 바꿉니다. `B365*`, `B365C*`(bet365 마감), `PS*`, `PSC*`(Pinnacle 마감) 컬럼을 읽습니다. 받은 데이터는 재배포하지 않도록 `.gitignore` 에 들어 있습니다.
 
 ## 구조
 
@@ -85,9 +100,9 @@ sssm/
   model/        Dixon-Coles 팀 전력 모델
   pricing.py    공정 확률 블렌딩 + 가치 선택지 필터
   parlay.py     조합 생성, 켈리 로그 성장률 정렬
-  backtest.py   walk-forward 백테스트, ROI/CLV
+  backtest.py   walk-forward 백테스트, 시장 대비 로그 손실, 단식·조합 ROI/CLV
   markets.py    마켓 키(1X2, H2H, BTTS, OU:라인, AH:라인)와 Fixture/Selection
-  history.py    과거 결과·배당 CSV 로더, football-data.co.uk 다운로더
+  history.py    과거 결과·배당 CSV 로더, football-data.co.uk / GitHub 미러 다운로더
   sources/      API-Football, TheOddsAPI 어댑터
   pipeline.py   전체 연결
   cli.py        python -m sssm ...

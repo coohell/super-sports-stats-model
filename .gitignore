@@ -52,3 +52,6 @@ data/snapshots/
 data/ledger.jsonl
 data/history/
 .pytest_cache/
+
+# 받은 과거 배당 (football-data.co.uk 데이터, 재배포하지 않음)
+data/history/*.csv

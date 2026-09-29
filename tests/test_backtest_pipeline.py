@@ -132,3 +132,64 @@ def test_snapshots_detect_stale_bet365_and_ledger_clv(tmp_path):
     rows = tracking.clv_report(ledger, snaps)
     assert rows and rows[0]["clv"] == pytest.approx(0.10, abs=1e-3)  # 2.2 x 0.5 - 1
     assert "CLV 계산 1/1건" in tracking.summarize_clv(rows)
+
+
+def test_from_mirror_maps_to_football_data_columns():
+    results = pd.DataFrame({"match_id": ["a", "b"], "season_code": [2324, 2324], "date": ["2023-08-11", "2023-08-12"],
+                            "home_team": ["Burnley", "Arsenal"], "away_team": ["Man City", "Nott'm Forest"],
+                            "fthg": [0, 2], "ftag": [3, 1]})
+    odds = pd.DataFrame({"match_id": ["a", "b"], "bet365_1x2_home": [8.0, 1.2], "bet365_1x2_home_close": [9.0, 1.18],
+                         "pinnacle_over25_close": [1.6, 1.7], "ladbrokes_1x2_home": [8.5, 1.2]})
+    out = history.from_mirror(results, odds)
+    assert list(out.columns) == ["Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "B365H", "B365CH", "PC>2.5"]
+    assert out["Season"].tolist() == ["2324", "2324"]
+    assert out.loc[0, "B365CH"] == 9.0
+
+
+def test_download_history_writes_files_and_hides_nothing_on_error(tmp_path):
+    class Resp:
+        def __init__(self, status, content=b""):
+            self.status_code, self.content, self.text = status, content, content.decode()
+
+    class Sess:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, timeout=None):
+            self.urls.append(url)
+            return Resp(200, b"Date,HomeTeam\n") if "2425" in url else Resp(404, b"not found")
+
+    s = Sess()
+    paths = history.download("E0", ["2425"], tmp_path, s)
+    assert s.urls == ["https://www.football-data.co.uk/mmz4281/2425/E0.csv"]
+    assert paths == [tmp_path / "E0_2425.csv"] and paths[0].read_bytes().startswith(b"Date")
+    import pytest
+
+    with pytest.raises(RuntimeError, match="404"):
+        history.download("E0", ["9999"], tmp_path, s)
+
+
+def test_download_mirror_writes_football_data_format(tmp_path):
+    files = {
+        "results.csv": "match_id,season,season_code,date,home_team,away_team,fthg,ftag\n"
+                       "a,2023-24,2324,2023-08-11,Burnley,Man City,0,3\n",
+        "results_with_odds.csv": "match_id,bet365_1x2_home,bet365_1x2_draw,bet365_1x2_away,pinnacle_1x2_home\n"
+                                 "a,8.0,5.0,1.4,8.5\n",
+    }
+
+    class Resp:
+        def __init__(self, text):
+            self.status_code, self.text, self.content = 200, text, text.encode()
+
+    class Sess:
+        def get(self, url, timeout=None):
+            return Resp(files[url.rsplit("/", 1)[1]])
+
+    paths = history.download_mirror(["2324"], tmp_path, Sess())
+    assert paths == [tmp_path / "E0_2324.csv"]
+    df = history.load(paths)
+    assert df.loc[0, "home"] == "Burnley" and df.loc[0, "B365A"] == 1.4
+    import pytest
+
+    with pytest.raises(ValueError, match="2425"):
+        history.download_mirror(["2425"], tmp_path, Sess())

@@ -54,7 +54,6 @@
 
 ## 한계
 
-- 마감 배당이 없어 **시장 대비 로그 손실과 배팅 ROI, CLV 는 아직 평가하지 못했다.** 이 환경에서는 football-data.co.uk 접속이 막혀 있다.
-  `python -m sssm fetch-history` 로 받은 CSV 를 `python -m sssm backtest --csv data/history/E0_*.csv` 에 넣으면 자동으로 계산한다.
+- 시장 대비 로그 손실과 배팅 ROI, CLV 는 [market_backtest_epl.md](market_backtest_epl.md) 에 있다. 모델은 bet365 시가보다 부정확하고(1X2 0.974 vs 0.951) 모델 근거 배팅의 CLV 는 음수였다.
 - 팀 전력만 쓰므로 부상, 로테이션, 라인업 같은 정보는 반영하지 못한다. 이런 정보는 Pinnacle 가격에 이미 들어 있기 때문에
   최종 확률에서 Pinnacle 비중을 0.8 로 둔다.
