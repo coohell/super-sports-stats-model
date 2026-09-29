@@ -9,6 +9,7 @@
 #                     v3.football.api-sports.io 에 닿지 않으면 코드 4
 #   SSSM_DATA_DIR     스냅샷·장부 위치. 기본: /mnt/project-files/sssm-data 가 있으면 거기, 아니면 data/
 #   SSSM_LEAGUES      API-Football 리그 id (기본 "39 140 78 135 61" = 유럽 5대 리그)
+#   SSSM_MIN_LEGS     매일 따로 뽑는 조합의 최소 폴 수 (기본 3)
 #   SSSM_BANKROLL     자본 (원, 기본 1000000)
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -38,7 +39,7 @@ common=(--source apifootball --league $leagues --days 1 --bankroll "${SSSM_BANKR
 
 case "$mode" in
   picks)
-    python -m sssm picks "${common[@]}" --record || exit $?
+    python -m sssm picks "${common[@]}" --record --min-legs "${SSSM_MIN_LEGS:-3}" || exit $?
     echo
     echo "== CLV =="
     python -m sssm clv

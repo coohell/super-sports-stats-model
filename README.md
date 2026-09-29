@@ -49,7 +49,7 @@ bet365 일반 멀티는 같은 경기 두 폴을 허용하지 않으므로 멀�
 
 `picks --record` 는 배당 스냅샷을 `data/snapshots/` 에, 추천 배팅을 `data/ledger.jsonl` 에 쌓습니다. 직전 스냅샷보다 Pinnacle 은 움직였는데 bet365 는 그대로인 선택지(남은 엣지의 주 원천)를 표시하고, `python -m sssm clv` 는 추천 배팅마다 킥오프 직전 Pinnacle 공정 확률 기준 CLV 를 계산합니다. 경기 전 몇 시간 간격으로 `picks --record` 를 돌리면 됩니다(cron 등).
 
-매일 자동으로 돌릴 때는 `scripts/daily.sh` 를 씁니다. `picks` 는 유럽 5대 리그(`SSSM_LEAGUES` 로 변경)의 오늘·내일(UTC) 경기로 추천을 뽑아 장부에 남기고 CLV 를 요약하며, `snapshot` 은 추천 없이 배당만 기록해 킥오프 직전 마감 가격을 쌓습니다(`picks --snapshot-only`). 기록은 `SSSM_DATA_DIR` 에 쌓이고, 없으면 `/mnt/project-files/sssm-data` 가 있을 때 그곳을 씁니다. `API_FOOTBALL_KEY` 가 없거나 `v3.football.api-sports.io` 에 닿지 않으면 가짜 추천 대신 한 줄 안내(`NO_KEY`/`NO_NET`)를 내고 끝납니다.
+매일 자동으로 돌릴 때는 `scripts/daily.sh` 를 씁니다. `picks` 는 유럽 5대 리그(`SSSM_LEAGUES` 로 변경)의 오늘·내일(UTC) 경기로 추천과 3폴 이상 최강 조합(`--min-legs`, +엣지 폴만 써서 그 하나만 걸 때 켈리 성장이 가장 큰 조합, 가장 좋은 단식과 비교)을 뽑아 장부에 남기고 CLV 를 요약하며, `snapshot` 은 추천 없이 배당만 기록해 킥오프 직전 마감 가격을 쌓습니다(`picks --snapshot-only`). 기록은 `SSSM_DATA_DIR` 에 쌓이고, 없으면 `/mnt/project-files/sssm-data` 가 있을 때 그곳을 씁니다. `API_FOOTBALL_KEY` 가 없거나 `v3.football.api-sports.io` 에 닿지 않으면 가짜 추천 대신 한 줄 안내(`NO_KEY`/`NO_NET`)를 내고 끝납니다.
 
 ## 검증 결과
 

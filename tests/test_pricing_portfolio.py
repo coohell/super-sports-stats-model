@@ -130,3 +130,36 @@ def test_two_way_sport_uses_h2h_only():
     assert home.ev == pytest.approx(0.05)
     pf = optimize(value_bets(sels, ValueFilter(min_edge=0.0)), {"1": fp})
     assert np.isfinite(pf.growth)
+
+
+def _fx(fid, b365_home, pin=(2.0, 4.0, 4.0)):
+    from sssm.markets import Fixture
+
+    return Fixture(fid, "2026-10-03T14:00:00+00:00", "EPL", f"H{fid}", f"A{fid}",
+                   {"bet365": {"1X2": {"home": b365_home, "draw": 3.4, "away": 3.4}},
+                    "pinnacle": {"1X2": dict(zip(("home", "draw", "away"), pin))}})
+
+
+def test_best_combo_uses_only_positive_edge_legs_from_different_fixtures():
+    from sssm import pipeline
+    from sssm.pricing import PricingConfig
+
+    fxs = [_fx(f"f{i}", 2.2 + 0.05 * i) for i in range(4)]
+    st = pipeline.Settings(pricing=PricingConfig(shrink=1.0), min_legs=3)
+    rep = pipeline.analyze(fxs, None, "test", st)
+    c = rep.combo
+    assert c.bet is not None and c.bet.n_legs >= 3
+    assert len({s.fixture_id for s in c.bet.legs}) == c.bet.n_legs
+    assert all(s.edge > 0 for s in c.bet.legs)
+    assert 0 < c.bet.stake <= st.portfolio.max_bet and c.best_single is not None
+    assert "3폴 이상 최강 조합" in rep.to_markdown() and "비교: 가장 좋은 단식" in rep.to_markdown()
+
+
+def test_best_combo_refuses_to_pad_with_no_edge_legs():
+    from sssm import pipeline
+    from sssm.pricing import PricingConfig
+
+    fxs = [_fx("f0", 2.3), _fx("f1", 2.3), _fx("f2", 1.8), _fx("f3", 1.8)]  # 엣지는 두 경기뿐
+    rep = pipeline.analyze(fxs, None, "test", pipeline.Settings(pricing=PricingConfig(shrink=1.0), min_legs=3))
+    assert rep.combo.bet is None and rep.combo.n_value_fixtures == 2
+    assert "만들지 않았습니다" in rep.to_markdown()

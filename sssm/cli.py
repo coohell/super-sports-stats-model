@@ -44,6 +44,14 @@ def _print_report(rep: pipeline.Report) -> None:
               f"손실 확률 {pf.p_loss:.0%}")
 
 
+def _print_combo(rep: pipeline.Report) -> None:
+    if rep.combo is not None:
+        print()
+        for line in rep.combo_lines():
+            if not line.startswith("|---"):
+                print(line.replace("| ", " ").replace(" |", " ").strip() if line.startswith("|") else line)
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="sssm", description="bet365 최강 조합 탐색기")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -72,6 +80,8 @@ def main(argv=None) -> None:
     pk.add_argument("--model-weight", type=float, default=0.0, help="자체 모델 섞는 비율 (model-eval 로 근거 확인)")
     pk.add_argument("--record", action="store_true",
                     help="배당 스냅샷과 추천 배팅을 기록 (CLV 추적, 위치는 SSSM_DATA_DIR 또는 data/)")
+    pk.add_argument("--min-legs", type=int, default=0,
+                    help="이 폴 수 이상 조합 하나를 따로 뽑는다 (+엣지 폴만, 경기당 한 폴). 0 이면 끔")
     pk.add_argument("--snapshot-only", action="store_true",
                     help="배당 스냅샷만 기록하고 추천 배팅은 장부에 남기지 않음 (킥오프 직전 마감 배당 수집용)")
     pk.add_argument("--out", type=Path, default=ROOT / "reports" / "latest.json")
@@ -129,7 +139,8 @@ def main(argv=None) -> None:
     if a.cmd == "picks":
         pricing, value, port = configs()
         st = pipeline.Settings(pricing=pricing, value=value, portfolio=port, bankroll=a.bankroll,
-                               record=a.record or a.snapshot_only, log_bets=not a.snapshot_only)
+                               record=a.record or a.snapshot_only, log_bets=not a.snapshot_only,
+                               min_legs=a.min_legs)
         if a.source == "demo":
             rep = pipeline.run_file(settings=st)
         elif a.source == "file":
@@ -139,6 +150,7 @@ def main(argv=None) -> None:
         else:
             rep = pipeline.run_theoddsapi(a.sport, st, tuple(a.markets.split(",")))
         _print_report(rep)
+        _print_combo(rep)
         out = rep.save(a.out)
         md = out.with_suffix(".md")
         md.write_text(rep.to_markdown(), encoding="utf-8")
