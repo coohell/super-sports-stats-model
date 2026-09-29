@@ -26,18 +26,27 @@ DEFAULT_RESULTS = ROOT / "data" / "epl_results_2015_2025.csv"
 HISTORY_DIR = ROOT / "data" / "history"
 MIRROR_URL = "https://raw.githubusercontent.com/AnishKhetani/premier-league-data/main/data/processed"
 
-ODDS_COLUMNS = {
-    "B365H": ("bet365", "1X2", "home"), "B365D": ("bet365", "1X2", "draw"), "B365A": ("bet365", "1X2", "away"),
-    "B365CH": ("bet365_close", "1X2", "home"), "B365CD": ("bet365_close", "1X2", "draw"),
-    "B365CA": ("bet365_close", "1X2", "away"),
-    "PSH": ("pinnacle", "1X2", "home"), "PSD": ("pinnacle", "1X2", "draw"), "PSA": ("pinnacle", "1X2", "away"),
-    "PSCH": ("pinnacle_close", "1X2", "home"), "PSCD": ("pinnacle_close", "1X2", "draw"),
-    "PSCA": ("pinnacle_close", "1X2", "away"),
-    "B365>2.5": ("bet365", "OU:2.5", "over"), "B365<2.5": ("bet365", "OU:2.5", "under"),
-    "B365C>2.5": ("bet365_close", "OU:2.5", "over"), "B365C<2.5": ("bet365_close", "OU:2.5", "under"),
-    "P>2.5": ("pinnacle", "OU:2.5", "over"), "P<2.5": ("pinnacle", "OU:2.5", "under"),
-    "PC>2.5": ("pinnacle_close", "OU:2.5", "over"), "PC<2.5": ("pinnacle_close", "OU:2.5", "under"),
-}
+def _odds_columns() -> dict:
+    """football-data 배당 컬럼 -> (북, 마켓, 결과). 시가/마감을 다른 "북"으로 본다."""
+    cols = {}
+    for prefix, book in (("B365", "bet365"), ("B365C", "bet365_close"), ("PS", "pinnacle"), ("PSC", "pinnacle_close"),
+                         ("Avg", "avg"), ("AvgC", "avg_close"), ("Max", "max"), ("MaxC", "max_close")):
+        for suf, o in (("H", "home"), ("D", "draw"), ("A", "away")):
+            cols[f"{prefix}{suf}"] = (book, "1X2", o)
+    for prefix, book in (("B365", "bet365"), ("B365C", "bet365_close"), ("P", "pinnacle"), ("PC", "pinnacle_close"),
+                         ("Avg", "avg"), ("AvgC", "avg_close"), ("Max", "max"), ("MaxC", "max_close")):
+        cols[f"{prefix}>2.5"] = (book, "OU:2.5", "over")
+        cols[f"{prefix}<2.5"] = (book, "OU:2.5", "under")
+    # 아시안 핸디캡: 라인은 AHh(시가)/AHCh(마감) 컬럼, 마켓 이름은 row_to_fixture 에서 채운다
+    for prefix, book in (("B365AH", "bet365"), ("B365CAH", "bet365_close"), ("PAH", "pinnacle"),
+                         ("PCAH", "pinnacle_close")):
+        cols[f"{prefix}H"] = (book, "AH", "home")
+        cols[f"{prefix}A"] = (book, "AH", "away")
+    return cols
+
+
+ODDS_COLUMNS = _odds_columns()
+AH_LINE_COLUMNS = {"bet365": "AHh", "pinnacle": "AHh", "bet365_close": "AHCh", "pinnacle_close": "AHCh"}
 
 
 def _parse_dates(s: pd.Series) -> pd.Series:
@@ -57,7 +66,10 @@ def load(paths: Union[str, Path, Iterable[Union[str, Path]]] = DEFAULT_RESULTS) 
         df = df.rename(columns={"Date": "date", "HomeTeam": "home", "AwayTeam": "away", "FTHG": "hg", "FTAG": "ag"})
         df = df.dropna(subset=["home", "away"])
         df["date"] = _parse_dates(df["date"].astype(str))
-        keep = ["date", "home", "away", "hg", "ag"] + [c for c in ODDS_COLUMNS if c in df.columns]
+        if "AHh" not in df.columns and "BbAHh" in df.columns:
+            df["AHh"] = df["BbAHh"]
+        extra = [c for c in ("AHh", "AHCh", "Div", "Season") if c in df.columns]
+        keep = ["date", "home", "away", "hg", "ag"] + [c for c in ODDS_COLUMNS if c in df.columns] + extra
         frames.append(df[keep])
     out = pd.concat(frames, ignore_index=True).sort_values("date").reset_index(drop=True)
     return out
@@ -65,6 +77,32 @@ def load(paths: Union[str, Path, Iterable[Union[str, Path]]] = DEFAULT_RESULTS) 
 
 def has_odds(df: pd.DataFrame) -> bool:
     return {"B365H", "PSH"}.issubset(df.columns)
+
+
+def row_to_fixture(row, books: Optional[dict] = None, fixture_id: Optional[str] = None):
+    """과거 데이터 한 줄을 Fixture 로. books 는 {데이터의 북 이름: Fixture 에 쓸 이름}.
+
+    예: 마감 시점을 흉내 내려면 {"bet365_close": "bet365", "pinnacle_close": "pinnacle"}.
+    """
+    from .markets import Fixture, make
+
+    books = books or {"bet365": "bet365", "pinnacle": "pinnacle"}
+    fx = Fixture(fixture_id or f"{row['date']:%Y%m%d}-{row['home']}-{row['away']}", f"{row['date']:%Y-%m-%d}",
+                 str(row.get("Div", "")), row["home"], row["away"])
+    for col, (book, market, outcome) in ODDS_COLUMNS.items():
+        if book not in books or col not in row.index:
+            continue
+        v = row[col]
+        if pd.isna(v) or v <= 1.0:
+            continue
+        if market == "AH":
+            line_col = AH_LINE_COLUMNS[book]
+            line = row.get(line_col)
+            if line is None or pd.isna(line):
+                continue
+            market = make("AH", float(line))
+        fx.odds.setdefault(books[book], {}).setdefault(market, {})[outcome] = float(v)
+    return fx
 
 
 FOOTBALL_DATA_URL = "https://www.football-data.co.uk/mmz4281/{season}/{league}.csv"
@@ -141,4 +179,4 @@ def download_mirror(seasons: Iterable[str], out: Path = HISTORY_DIR, session: Op
 
 
 def history_files(out: Path = HISTORY_DIR) -> List[Path]:
-    return sorted(Path(out).glob("E0_*.csv"))
+    return sorted(Path(out).glob("*.csv"))  # E0_2425.csv, E1_2425.csv ... 여러 리그를 함께 쓴다

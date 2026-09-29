@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from sssm.pricing import price_fixture
+from sssm.pricing import price_fixture, selections
 from sssm.sources.apifootball import APIFootball, parse_bets
 from sssm.sources.theoddsapi import TheOddsAPI, parse_event
 
@@ -39,7 +39,7 @@ def test_parse_apifootball_odds_with_multiple_totals_lines():
         {"id": 5, "name": "Goals Over/Under", "values": [
             {"value": "Over 1.5", "odd": "1.30"}, {"value": "Under 1.5", "odd": "3.40"},
             {"value": "Over 2.5", "odd": "1.90"}, {"value": "Under 2.5", "odd": "1.95"},
-            {"value": "Over 2.75", "odd": "2.05"}, {"value": "Under 2.75", "odd": "1.80"},  # 쿼터 라인은 제외
+            {"value": "Over 2.75", "odd": "2.05"}, {"value": "Under 2.75", "odd": "1.80"},  # 쿼터 라인도 지원
             {"value": "Over 3.5", "odd": "3.10"}]},  # Under 가 없는 라인은 제외
         {"id": 8, "name": "Both Teams Score", "values": [{"value": "Yes", "odd": "1.80"}, {"value": "No", "odd": "2.00"}]},
     ]}]}
@@ -48,7 +48,8 @@ def test_parse_apifootball_odds_with_multiple_totals_lines():
     assert out["OU:1.5"] == {"over": 1.30, "under": 3.40}
     assert out["OU:2.5"] == {"over": 1.90, "under": 1.95}
     assert out["BTTS"] == {"yes": 1.80, "no": 2.00}
-    assert set(out) == {"1X2", "OU:1.5", "OU:2.5", "BTTS"}
+    assert out["OU:2.75"] == {"over": 2.05, "under": 1.80}
+    assert set(out) == {"1X2", "OU:1.5", "OU:2.5", "OU:2.75", "BTTS"}
 
 
 def _af_item(fid, bid, name, home_odd):
@@ -166,8 +167,8 @@ def test_spread_line_is_normalised_to_home_and_lines_are_not_mixed():
     fx = parse_event(e)
     assert fx.market("pinnacle", "AH:-1.5") == {"home": 1.9, "away": 1.9}
     assert fx.market("bet365", "AH:-2.5") == {"home": 2.0, "away": 1.8}
-    # 두 북의 라인이 다르면 서로 비교 대상이 되지 않는다
-    assert price_fixture(fx) == []
+    # AFL 은 스코어 격자로 핸디캡을 가격 매길 수 없어 아무것도 내지 않는다
+    assert price_fixture(fx) is None
 
 
 def test_spread_with_inconsistent_away_line_is_dropped():
@@ -176,11 +177,12 @@ def test_spread_with_inconsistent_away_line_is_dropped():
     assert fx.odds["pinnacle"] == {}
 
 
-def test_integer_and_quarter_lines_are_dropped():
+def test_integer_and_quarter_lines_are_kept():
+    # 정수(적특)와 쿼터(반승/반패) 라인도 정산 규칙대로 가격을 매길 수 있다
     fx = parse_event(_event("pinnacle", [{"key": "totals", "outcomes": [
         {"name": "Over", "price": 1.9, "point": 3.0}, {"name": "Under", "price": 1.9, "point": 3.0},
         {"name": "Over", "price": 1.9, "point": 2.75}, {"name": "Under", "price": 1.9, "point": 2.75}]}]))
-    assert fx.odds["pinnacle"] == {}
+    assert set(fx.odds["pinnacle"]) == {"OU:3", "OU:2.75"}
 
 
 def test_edge_from_theodds_uses_devigged_pinnacle():
@@ -188,9 +190,10 @@ def test_edge_from_theodds_uses_devigged_pinnacle():
         _event("pinnacle", [{"key": "h2h", "outcomes": [{"name": "A", "price": 2.0}, {"name": "B", "price": 2.0}]}]),
         _event("bet365_au", [{"key": "h2h", "outcomes": [{"name": "A", "price": 2.2}, {"name": "B", "price": 1.8}]}]),
     )
-    sels = {s.outcome: s for s in price_fixture(parse_event(e))}
+    sels = {s.outcome: s for s in selections(price_fixture(parse_event(e)))}
     assert sels["home"].ev == pytest.approx(0.10)  # 2.2 * 0.5 - 1
     assert sels["away"].ev == pytest.approx(-0.10)
+    assert 0 < sels["home"].edge < sels["home"].ev  # shrink 가 엣지를 줄인다
 
 
 def _theodds_events():

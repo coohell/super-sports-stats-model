@@ -1,291 +1,223 @@
-"""Walk-forward 백테스트.
+"""시장 백테스트: 실제 엔진(가격 → 가치 선택지 → 포트폴리오)을 과거 배당에 그대로 돌린다.
 
-매주 그 주 이전 경기로만 Dixon-Coles 를 다시 학습하고 그 주 경기를 예측한다
-(미래 정보 누수 없음).
-
-1. 결과만 있는 CSV: 모델의 예측력(로그 손실, 브라이어, 정확도)을 단순 기준선과 비교한다.
-2. 배당 컬럼이 있는 CSV(football-data.co.uk): 시장 배당 자체의 로그 손실과 비교하고,
-   bet365 시가(B365H 등, 경기 며칠 전 수집)에 +EV 단식·조합을 걸었을 때의
-   수익률(ROI, 95% 신뢰구간), 마감 배당 대비 CLV, 최적 sharp_weight 를 계산한다.
+- 날짜 순서대로, 같은 날 경기들을 한 번에 놓고 포트폴리오를 짠 뒤 결과로 정산하고
+  자금을 갱신한다. 그날 이전 정보만 쓴다.
+- shrink 는 그 시점 이전 경기로만 다시 추정한다(시즌마다). 미래 정보 누수 없음.
+- phase="open": bet365/Pinnacle 시가로 걸고 Pinnacle 마감으로 CLV 를 잰다.
+  phase="close": 두 북 모두 마감 가격으로 건다 (경기 직전 bet365 가 Pinnacle 을
+  못 따라간 순간을 잡는 전략의 근사). 이때 CLV 는 없다.
+- 신뢰구간은 날짜 단위 블록 부트스트랩이다. 같은 날 배팅들은 서로 얽혀 있어서
+  배팅 단위로 뽑으면 구간이 실제보다 좁게 나온다.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
-from . import markets as mkt
-from .history import ODDS_COLUMNS, has_odds
-from .model import DixonColes
-from .markets import Selection
-from .odds import devig
-from .parlay import Parlay
+from . import grid as gridlib
+from .calibrate import shrink_from_history
+from .history import row_to_fixture
+from .markets import N
+from .portfolio import PortfolioConfig, optimize
+from .pricing import PricingConfig, ValueFilter, price_fixture, selections, value_bets
 
-EVAL_MARKETS = ("1X2", "OU:2.5", "BTTS")
-
-
-def _outcome(market: str, hg: int, ag: int) -> str:
-    if market == "1X2":
-        return "home" if hg > ag else "draw" if hg == ag else "away"
-    if market == "OU:2.5":
-        return "over" if hg + ag > 2.5 else "under"
-    return "yes" if hg > 0 and ag > 0 else "no"
-
-
-def walk_forward(df: pd.DataFrame, start: Optional[str] = None, min_train: int = 300,
-                 **model_kwargs) -> pd.DataFrame:
-    """각 경기에 대해 학습 시점 이전 데이터만 쓴 모델 확률(model_<마켓>_<결과>)을 붙여 돌려준다.
-
-    model_kwargs 는 DixonColes(xi=..., ridge=...) 로 전달된다.
-    """
-    df = df.sort_values("date").reset_index(drop=True)
-    start_ts = pd.Timestamp(start) if start else df["date"].iloc[min(min_train, len(df) - 1)]
-    test = df[df["date"] >= start_ts].copy()
-    test["week"] = test["date"].dt.to_period("W-MON")
-    rows = []
-    for _, chunk in test.groupby("week"):
-        as_of = chunk["date"].min()
-        train = df[df["date"] < as_of]
-        if len(train) < min_train:
-            continue
-        model = DixonColes(**model_kwargs).fit(train, as_of=as_of)
-        for i, m in chunk.iterrows():
-            pred = model.predict(m["home"], m["away"], EVAL_MARKETS)
-            if pred is None:
-                continue
-            row = {"idx": i}
-            for market in EVAL_MARKETS:
-                for o, p in pred[market].items():
-                    row[f"model_{market}_{o}"] = p
-            rows.append(row)
-    if not rows:
-        return test.iloc[0:0].drop(columns="week")
-    preds = pd.DataFrame(rows).set_index("idx")
-    return test.join(preds, how="inner").drop(columns="week")
-
-
-def _log_loss(p: np.ndarray) -> float:
-    return float(-np.mean(np.log(np.clip(p, 1e-12, 1))))
-
-
-def _book_probs(row: pd.Series, book: str, market: str, method: str = "power") -> Optional[Dict[str, float]]:
-    odds = _book_odds(row, book, market)
-    if not odds or len(odds) != len(mkt.outcomes(market)):
-        return None
-    return dict(zip(mkt.outcomes(market), devig([odds[o] for o in mkt.outcomes(market)], method)))
-
-
-def _book_odds(row: pd.Series, book: str, market: str) -> Optional[Dict[str, float]]:
-    cols = {o: c for c, (b, mk, o) in ODDS_COLUMNS.items() if b == book and mk == market}
-    if not cols or not all(c in row.index and pd.notna(row[c]) and row[c] > 1 for c in cols.values()):
-        return None
-    return {o: float(row[c]) for o, c in cols.items()}
-
-
-def _summary(returns: List[float], wins: List[bool], clv_pin: List[Optional[float]],
-             clv_b365: List[Optional[float]]) -> dict:
-    r = np.asarray(returns, dtype=float)
-    n = len(r)
-    se = float(r.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
-    cp = [c for c in clv_pin if c is not None]
-    cb = [c for c in clv_b365 if c is not None]
-    return {
-        "bets": n,
-        "hit": float(np.mean(wins)) if n else 0.0,
-        "roi": float(r.mean()) if n else 0.0,
-        "roi_lo": float(r.mean() - 1.96 * se) if n > 1 else None,
-        "roi_hi": float(r.mean() + 1.96 * se) if n > 1 else None,
-        "profit": float(r.sum()),
-        "clv": float(np.mean(cp)) if cp else None,
-        "clv_n": len(cp),
-        "clv_b365": float(np.mean(cb)) if cb else None,
-    }
+PHASES = {
+    "open": ({"bet365": "bet365", "pinnacle": "pinnacle"}, {"pinnacle_close": "pinnacle"}),
+    "close": ({"bet365_close": "bet365", "pinnacle_close": "pinnacle"}, None),
+}
 
 
 @dataclass
-class BacktestReport:
-    n_matches: int
+class Strategy:
+    name: str
+    portfolio: PortfolioConfig
+    value: ValueFilter = field(default_factory=ValueFilter)
+    flat: bool = False  # True 면 켈리 대신 선택지마다 자본의 flat_stake 를 단식으로 건다
+    flat_stake: float = 0.01
+
+
+def default_strategies(acca_bonus: Optional[Dict[int, float]] = None) -> List[Strategy]:
+    out = [
+        Strategy("단식 균등 1%", PortfolioConfig(max_legs=1), flat=True),
+        Strategy("단식 켈리", PortfolioConfig(max_legs=1)),
+        Strategy("단식+멀티 켈리 (최강 조합)", PortfolioConfig(max_legs=3)),
+    ]
+    if acca_bonus:
+        out.append(Strategy("단식+멀티 켈리 + 부스트", PortfolioConfig(max_legs=4, acca_bonus=dict(acca_bonus))))
+    return out
+
+
+@dataclass
+class StrategyResult:
+    name: str
+    bets: pd.DataFrame  # 배팅 한 건당 한 줄
+    days: pd.DataFrame  # 날짜별 자금
+
+    def summary(self, n_boot: int = 2000, seed: int = 0) -> dict:
+        b, d = self.bets, self.days
+        if b.empty:
+            return {"strategy": self.name, "bets": 0}
+        turnover = b["stake_amt"].sum()
+        profit = b["pnl"].sum()
+        eq = d["bankroll"].to_numpy()
+        peak = np.maximum.accumulate(np.concatenate([[1.0], eq]))
+        mdd = float(np.max(1 - np.concatenate([[1.0], eq]) / peak))
+        # 날짜 블록 부트스트랩
+        rng = np.random.default_rng(seed)
+        by_day = b.groupby("date").agg(stake=("stake_amt", "sum"), pnl=("pnl", "sum"))
+        dg = np.log(d["bankroll"]).diff().fillna(np.log(d["bankroll"].iloc[0])).to_numpy()
+        rois, growth = [], []
+        for _ in range(n_boot):
+            i = rng.integers(0, len(by_day), len(by_day))
+            s = by_day["stake"].to_numpy()[i].sum()
+            rois.append(by_day["pnl"].to_numpy()[i].sum() / s if s > 0 else 0.0)
+            j = rng.integers(0, len(dg), len(dg))
+            growth.append(dg[j].sum())
+        clv = b["clv"].dropna()
+        w = b.loc[clv.index, "stake_amt"]
+        return {
+            "strategy": self.name, "bets": int(len(b)), "days": int(len(by_day)),
+            "singles": int((b["legs"] == 1).sum()), "multis": int((b["legs"] > 1).sum()),
+            "hit": float((b["pnl"] > 0).mean()), "turnover": float(turnover),
+            "roi": float(profit / turnover), "roi_lo": float(np.quantile(rois, 0.025)),
+            "roi_hi": float(np.quantile(rois, 0.975)),
+            "final": float(eq[-1]), "log_growth": float(np.log(eq[-1])),
+            "growth_lo": float(np.quantile(growth, 0.025)), "growth_hi": float(np.quantile(growth, 0.975)),
+            "max_dd": mdd, "pred_edge": float(np.average(b["edge"], weights=b["stake_amt"])),
+            "pred_ev": float(np.average(b["ev"], weights=b["stake_amt"])),
+            "clv": float(np.average(clv, weights=w)) if len(clv) and w.sum() > 0 else None,
+        }
+
+
+@dataclass
+class BacktestResult:
     period: str
-    log_loss: Dict[str, Dict[str, float]]  # market -> {model, baseline, ...}
-    betting: List[dict] = field(default_factory=list)  # 단식 (전략별)
-    parlays: List[dict] = field(default_factory=list)  # 조합 (전략 x 방식)
-    by_season: List[dict] = field(default_factory=list)  # 대표 전략 단식의 시즌별 성과
-    market_loss: Dict[str, Dict[str, float]] = field(default_factory=dict)  # 배당이 모두 있는 경기에서 비교
-    best_sharp_weight: Optional[float] = None
-    brier_1x2: float = float("nan")
-    accuracy_1x2: float = float("nan")
+    n_matches: int
+    phase: str
+    shrink_used: List[tuple]
+    results: List[StrategyResult]
+
+    def table(self) -> pd.DataFrame:
+        return pd.DataFrame([r.summary() for r in self.results])
 
     def to_text(self) -> str:
-        lines = [f"백테스트: {self.n_matches}경기 ({self.period})", "", "로그 손실 (낮을수록 좋음)"]
-        for mk, d in self.log_loss.items():
-            lines.append("  " + mk.ljust(7) + "  ".join(f"{k} {v:.4f}" for k, v in d.items()))
-        lines.append(f"\n1X2 브라이어 {self.brier_1x2:.4f}  정확도 {self.accuracy_1x2:.1%}")
-        if self.market_loss:
-            lines += ["", "시장 배당과 비교 (배당이 모두 있는 경기만, 마진 제거)"]
-            for mk, d in self.market_loss.items():
-                lines.append("  " + mk.ljust(7) + "  ".join(
-                    f"{k} {v:.4f}" if k != "n" else f"n={int(v)}" for k, v in d.items()))
-        if self.best_sharp_weight is not None:
-            lines.append(f"1X2 로그 손실이 가장 낮은 sharp_weight: {self.best_sharp_weight:.1f}")
-
-        def fmt(b: dict, name: str) -> str:
-            ci = f"[{b['roi_lo']:+.1%}, {b['roi_hi']:+.1%}]" if b.get("roi_lo") is not None else "      -"
-            clv = f"{b['clv']:+.2%}" if b.get("clv") is not None else "   -"
-            clvb = f"{b['clv_b365']:+.2%}" if b.get("clv_b365") is not None else "   -"
-            return (f"  {name:<30} {b['bets']:>5}  {b['hit']:6.1%}  {b['roi']:+7.2%} {ci:<18} "
-                    f"{b['profit']:+8.1f}  {clv:>7}  {clvb:>7}")
-
-        header = f"  {'전략':<28} {'배팅':>6}  {'적중':>6}  {'ROI':>7} {'95% 구간':<17} {'손익(u)':>8}  {'CLV(P)':>7}  {'CLV(B)':>7}"
-        if self.betting:
-            lines += ["", "bet365 시가 단식 (1유닛 균등)", header]
-            lines += [fmt(b, b["strategy"]) for b in self.betting]
-        if self.parlays:
-            lines += ["", "bet365 시가 조합 (1유닛 균등, 서로 다른 경기)", header]
-            lines += [fmt(b, f"{b['strategy']} / {b['kind']}") for b in self.parlays]
-        if self.by_season:
-            lines += ["", f"시즌별 단식 ({self.by_season[0]['strategy']})", header]
-            lines += [fmt(b, b["season"]) for b in self.by_season]
-        if self.betting:
-            lines += ["", "CLV(P): Pinnacle 마감 공정확률 x 건 배당 - 1, CLV(B): bet365 마감 공정확률 기준"]
+        lines = [f"시장 백테스트 ({self.phase}): {self.n_matches}경기, {self.period}"]
+        if self.shrink_used:
+            lines.append("shrink(그 시점까지 데이터로 추정): " + ", ".join(f"{d} {s:.2f}" for d, s in self.shrink_used))
+        lines += ["", f"{'전략':<24}{'배팅':>6}{'멀티':>6}{'적중':>7}{'ROI':>9}  {'95% 구간':<20}{'자금':>8}"
+                      f"{'로그성장 95%':>24}{'MDD':>7}{'예측엣지':>9}{'CLV':>8}"]
+        for r in self.results:
+            s = r.summary()
+            if not s["bets"]:
+                lines.append(f"{s['strategy']:<24}{0:>6}")
+                continue
+            clv = f"{s['clv']:+.2%}" if s["clv"] is not None else "-"
+            roi_ci = f"[{s['roi_lo']:+.1%}, {s['roi_hi']:+.1%}]"
+            g_ci = f"{s['log_growth']:+.2f} [{s['growth_lo']:+.2f}, {s['growth_hi']:+.2f}]"
+            lines.append(f"{s['strategy']:<24}{s['bets']:>6}{s['multis']:>6}{s['hit']:>7.1%}{s['roi']:>+9.2%}  "
+                         f"{roi_ci:<20}{s['final']:>8.3f}{g_ci:>24}{s['max_dd']:>7.1%}{s['pred_edge']:>+9.2%}{clv:>8}")
+        lines += ["", "ROI = 순이익/총배팅액. 자금은 시작 1.0 기준. 구간은 날짜 블록 부트스트랩 95%.",
+                  "CLV = Pinnacle 마감 공정확률 기준 기대값(배팅액 가중). 양수가 이기는 배터의 표시다."]
         return "\n".join(lines)
 
 
-def _season(ts: pd.Timestamp) -> str:
-    y = ts.year if ts.month >= 7 else ts.year - 1
-    return f"{y}-{str(y + 1)[2:]}"
+def _close_grid(row, books) -> Optional[np.ndarray]:
+    fx = row_to_fixture(row, {**books, "bet365_close": "bet365"})
+    parts = gridlib.partition_markets(fx, "pinnacle")
+    if not parts:
+        return None
+    extra = None if gridlib.has_totals(parts) else [
+        p for p in gridlib.partition_markets(fx, "bet365") if gridlib.parse(p[0])[0] in gridlib.TOTAL_KINDS]
+    return gridlib.fit_grid(parts, extra=extra).ravel()
 
 
-def run(df: pd.DataFrame, start: Optional[str] = None, sharp_weight: float = 0.8, min_ev: float = 0.02,
-        model_only_min_ev: float = 0.10, min_train: int = 300, max_odds: float = 15.0,
-        **model_kwargs) -> BacktestReport:
-    wf = walk_forward(df, start, min_train=min_train, **model_kwargs)
-    if wf.empty:
-        raise ValueError("백테스트할 경기가 없습니다 (학습 데이터가 부족함)")
-    period = f"{wf['date'].min():%Y-%m-%d} ~ {wf['date'].max():%Y-%m-%d}"
-    actual = {mk: [_outcome(mk, int(h), int(a)) for h, a in zip(wf["hg"], wf["ag"])] for mk in EVAL_MARKETS}
+def run(df: pd.DataFrame, start: Optional[str] = None, phase: str = "open",
+        pricing: Optional[PricingConfig] = None, strategies: Optional[List[Strategy]] = None,
+        calibrate: bool = True, recalibrate_days: int = 180, min_calib: int = 300) -> BacktestResult:
+    if phase not in PHASES:
+        raise ValueError(f"phase 는 {list(PHASES)} 중 하나")
+    pricing = pricing or PricingConfig()
+    strategies = strategies or default_strategies()
+    books, close_books = PHASES[phase]
+    df = df.dropna(subset=["hg", "ag"]).sort_values("date", kind="mergesort").reset_index(drop=True)
+    test = df[df["date"] >= pd.Timestamp(start)] if start else df
+    if test.empty:
+        raise ValueError("백테스트할 경기가 없습니다")
 
-    # 기준선: 학습 구간 전체의 결과 빈도
-    train = df[df["date"] < wf["date"].min()]
-    ll: Dict[str, Dict[str, float]] = {}
-    for mk in EVAL_MARKETS:
-        base = pd.Series([_outcome(mk, int(h), int(a)) for h, a in zip(train["hg"], train["ag"])]).value_counts(normalize=True)
-        p_model = np.array([wf.iloc[i][f"model_{mk}_{o}"] for i, o in enumerate(actual[mk])])
-        p_base = np.array([base.get(o, 1e-6) for o in actual[mk]])
-        ll[mk] = {"model": _log_loss(p_model), "baseline": _log_loss(p_base)}
+    # 날짜별로 가격을 한 번만 매기고 모든 전략이 공유한다
+    state = {s.name: {"bankroll": 1.0, "bets": [], "days": []} for s in strategies}
+    shrink_used: List[tuple] = []
+    cur_pricing, next_calib = pricing, None
+    n_matches = 0
+    for date, day in test.groupby("date", sort=True):
+        if calibrate and (next_calib is None or date >= next_calib):
+            est = shrink_from_history(df[df["date"] < date])
+            if est is not None and est.n_matches >= min_calib:
+                cur_pricing = replace(pricing, shrink=est.shrink)
+                shrink_used.append((f"{date:%Y-%m}", est.shrink))
+            next_calib = date + pd.Timedelta(days=recalibrate_days)
+        pricings, sels, closes, scores = {}, [], {}, {}
+        for _, row in day.iterrows():
+            fx = row_to_fixture(row, books)
+            fp = price_fixture(fx, None, cur_pricing)
+            if fp is None:
+                continue
+            n_matches += 1
+            pricings[fx.fixture_id] = fp
+            sels.extend(selections(fp, cur_pricing))
+            scores[fx.fixture_id] = int(min(row["hg"], N - 1)) * N + int(min(row["ag"], N - 1))
+            if close_books:
+                closes[fx.fixture_id] = _close_grid(row, close_books)
+        for strat in strategies:
+            st = state[strat.name]
+            value = value_bets(sels, strat.value)
+            if not value:
+                continue
+            if strat.flat:
+                picks = [(s,) for s in value]
+                stakes = [strat.flat_stake] * len(picks)
+                edges = [(s.edge, s.ev) for s in value]
+            else:
+                pf = optimize(value, pricings, strat.portfolio)
+                picks = [b.legs for b in pf.bets]
+                stakes = [b.stake for b in pf.bets]
+                edges = [(b.edge, b.ev) for b in pf.bets]
+            if not picks:
+                continue
+            bank = st["bankroll"]
+            day_pnl = 0.0
+            for legs, f, (edge, ev) in zip(picks, stakes, edges):
+                amt = bank * f
+                gross = 1.0
+                clv = 1.0
+                for s in legs:
+                    k = scores[s.fixture_id]
+                    gross *= s.W[k] * s.odds + s.R[k]
+                    cg = closes.get(s.fixture_id)
+                    clv = clv * float(cg @ s.payoff()) if (cg is not None and clv is not None) else None
+                pnl = amt * (gross - 1.0)
+                day_pnl += pnl
+                st["bets"].append({
+                    "date": date, "legs": len(legs), "odds": float(np.prod([s.odds for s in legs])),
+                    "picks": " + ".join(f"{s.home}-{s.away} {s.label}" for s in legs),
+                    "stake": f, "stake_amt": amt, "pnl": pnl, "edge": edge, "ev": ev,
+                    "clv": None if clv is None else clv - 1.0,
+                })
+            st["bankroll"] = bank + day_pnl
+            st["days"].append({"date": date, "bankroll": st["bankroll"]})
+            if st["bankroll"] <= 1e-6:
+                st["bankroll"] = 1e-6
 
-    outs = mkt.outcomes("1X2")
-    P = wf[[f"model_1X2_{o}" for o in outs]].to_numpy()
-    y = np.array([outs.index(o) for o in actual["1X2"]])
-    report = BacktestReport(
-        n_matches=len(wf), period=period, log_loss=ll,
-        brier_1x2=float(((P - np.eye(3)[y]) ** 2).sum(axis=1).mean()),
-        accuracy_1x2=float((P.argmax(axis=1) == y).mean()),
-    )
-    if not has_odds(wf):
-        return report
-    rows = [r for _, r in wf.iterrows()]
-
-    # 시장 배당 자체의 예측력: 모델이 시장보다 정확한가?
-    books = ("bet365", "bet365_close", "pinnacle", "pinnacle_close")
-    for mk in ("1X2", "OU:2.5"):
-        per = {b: [_book_probs(r, b, mk) for r in rows] for b in books}
-        avail = [b for b in books if any(per[b])]
-        common = [i for i in range(len(rows)) if all(per[b][i] for b in avail)]
-        if not common or not avail:
-            continue
-        d = {"n": float(len(common)),
-             "model": _log_loss(np.array([rows[i][f"model_{mk}_{actual[mk][i]}"] for i in common]))}
-        for b in avail:
-            d[b] = _log_loss(np.array([per[b][i][actual[mk][i]] for i in common]))
-        report.market_loss[mk] = d
-
-    # Pinnacle 과 블렌드 비교 (1X2)
-    sharp_rows = [(i, _book_probs(r, "pinnacle", "1X2")) for i, r in enumerate(rows)]
-    sharp_rows = [(i, p) for i, p in sharp_rows if p]
-    if sharp_rows:
-        losses = {}
-        for w in np.round(np.arange(0, 1.01, 0.1), 1):
-            ps = [w * sp[actual["1X2"][i]] + (1 - w) * rows[i][f"model_1X2_{actual['1X2'][i]}"] for i, sp in sharp_rows]
-            losses[w] = _log_loss(np.array(ps))
-        ll["1X2"]["pinnacle"] = losses[1.0]
-        ll["1X2"][f"blend({sharp_weight})"] = losses.get(round(sharp_weight, 1), np.nan)
-        report.best_sharp_weight = float(min(losses, key=losses.get))
-
-    weeks = wf["date"].dt.to_period("W-MON").astype(str).tolist()
-    strategies = {"sharp+model": sharp_weight, "pinnacle only": 1.0, "model only": 0.0}
-    for name, w in strategies.items():
-        singles = []  # (Selection, win, clv_pin, clv_b365, week, season)
-        for i, r in enumerate(rows):
-            for mk in ("1X2", "OU:2.5"):
-                b365 = _book_odds(r, "bet365", mk)
-                if not b365 or len(b365) != len(mkt.outcomes(mk)):
-                    continue
-                sharp = _book_probs(r, "pinnacle", mk)
-                if w > 0 and not sharp:
-                    continue
-                model = {o: r[f"model_{mk}_{o}"] for o in mkt.outcomes(mk)}
-                fair = {o: w * (sharp[o] if sharp else 0) + (1 - w) * model[o] for o in mkt.outcomes(mk)}
-                thr = model_only_min_ev if w == 0 else min_ev
-                close_p = _book_probs(r, "pinnacle_close", mk)
-                close_b = _book_probs(r, "bet365_close", mk)
-                for o in mkt.outcomes(mk):
-                    if fair[o] * b365[o] - 1 < thr or b365[o] > max_odds:
-                        continue
-                    sel = Selection(fixture_id=str(i), kickoff=str(r["date"]), league="", home=r["home"], away=r["away"],
-                                    market=mk, outcome=o, odds=b365[o], fair_prob=float(fair[o]))
-                    singles.append((sel, actual[mk][i] == o,
-                                    close_p[o] * b365[o] - 1 if close_p else None,
-                                    close_b[o] * b365[o] - 1 if close_b else None,
-                                    weeks[i], _season(r["date"])))
-
-        report.betting.append({"strategy": name, **_summary(
-            [s.odds - 1 if win else -1.0 for s, win, *_ in singles], [x[1] for x in singles],
-            [x[2] for x in singles], [x[3] for x in singles])})
-        if name == "sharp+model":
-            for season in sorted({x[5] for x in singles}):
-                g = [x for x in singles if x[5] == season]
-                report.by_season.append({"strategy": name, "season": season, **_summary(
-                    [s.odds - 1 if win else -1.0 for s, win, *_ in g], [x[1] for x in g],
-                    [x[2] for x in g], [x[3] for x in g])})
-
-        # 조합: 주마다 +EV 단식으로 만든 조합. 이 저장소가 추천하는 방식(켈리 로그 성장률 1위)과 전체 2폴 조합
-        combos = {"주간 최강 2폴": [], "주간 최강 3폴": [], "전체 2폴": []}
-        by_week: Dict[str, list] = {}
-        for x in singles:
-            by_week.setdefault(x[4], []).append(x)
-        for wk, legs in by_week.items():
-            info = {id(x[0]): x for x in legs}
-            for k, kind in ((2, "주간 최강 2폴"), (3, "주간 최강 3폴")):
-                best = None
-                for p in _parlays_of(legs, k):
-                    if best is None or p.growth > best.growth:
-                        best = p
-                if best is not None:
-                    combos[kind].append([info[id(s)] for s in best.legs])
-            for p in _parlays_of(legs, 2):
-                combos["전체 2폴"].append([info[id(s)] for s in p.legs])
-        for kind, plist in combos.items():
-            rets, wins, cp, cb = [], [], [], []
-            for legs in plist:
-                win = all(x[1] for x in legs)
-                odds = float(np.prod([x[0].odds for x in legs]))
-                rets.append(odds - 1 if win else -1.0)
-                wins.append(win)
-                cp.append(float(np.prod([1 + x[2] for x in legs]) - 1) if all(x[2] is not None for x in legs) else None)
-                cb.append(float(np.prod([1 + x[3] for x in legs]) - 1) if all(x[3] is not None for x in legs) else None)
-            if rets:
-                report.parlays.append({"strategy": name, "kind": kind, **_summary(rets, wins, cp, cb)})
-    return report
-
-
-def _parlays_of(legs: list, k: int, pool: int = 12):
-    """legs 중 EV 상위 pool 개로 서로 다른 경기 k폴 조합을 만든다."""
-    from itertools import combinations
-
-    cands = sorted(legs, key=lambda x: x[0].ev, reverse=True)[:pool]
-    for combo in combinations(cands, k):
-        if len({x[0].fixture_id for x in combo}) < k:
-            continue
-        yield Parlay([x[0] for x in combo])
+    results = []
+    for strat in strategies:
+        st = state[strat.name]
+        bets = pd.DataFrame(st["bets"], columns=["date", "legs", "odds", "picks", "stake", "stake_amt", "pnl",
+                                                 "edge", "ev", "clv"])
+        bets["clv"] = pd.to_numeric(bets["clv"])
+        days = pd.DataFrame(st["days"], columns=["date", "bankroll"])
+        results.append(StrategyResult(strat.name, bets, days))
+    period = f"{test['date'].min():%Y-%m-%d} ~ {test['date'].max():%Y-%m-%d}"
+    return BacktestResult(period, n_matches, phase, shrink_used, results)

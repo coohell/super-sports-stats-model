@@ -9,11 +9,12 @@ def test_market_keys():
     assert mk.make("OU", 2.5) == "OU:2.5"
     assert mk.split("AH:-1.5") == ("AH", -1.5)
     assert mk.split("1X2") == ("1X2", None)
+    assert mk.canonical("OU2.5") == "OU:2.5"  # 옛 표기
     assert mk.outcomes("OU:3.5") == ("over", "under")
-    assert mk.is_supported("OU:2.5") and mk.is_supported("AH:-0.5") and mk.is_supported("BTTS")
-    assert not mk.is_supported("OU:2.75")  # 쿼터 라인
-    assert not mk.is_supported("AH:1")  # 푸시가 생기는 정수 라인
+    for m in ("OU:2.5", "AH:-0.5", "BTTS", "OU:2.75", "AH:1", "DNB", "TTH:1.5", "CS"):
+        assert mk.is_supported(m), m
     assert not mk.is_supported("OU")  # 라인 없음
+    assert not mk.is_supported("OU:2.6")
     assert not mk.is_supported("corners:9.5")
 
 
@@ -24,23 +25,52 @@ def test_labels():
     assert mk.label("1X2", "draw") == "무"
 
 
+def _payout(market, outcome, h, a, odds=2.0):
+    W, R = mk.settle(market, outcome)
+    return W[h, a] * odds + R[h, a]
+
+
+def test_asian_settlement_rules():
+    # 홈 -0.25: 이기면 승, 비기면 반패
+    assert _payout("AH:-0.25", "home", 1, 0) == 2.0
+    assert _payout("AH:-0.25", "home", 1, 1) == 0.5
+    # 원정 +0.25 (같은 마켓 반대쪽): 비기면 반승
+    assert _payout("AH:-0.25", "away", 1, 1) == pytest.approx(1.5)
+    # 홈 -1: 한 골 차 승은 적특
+    assert _payout("AH:-1", "home", 2, 1) == 1.0
+    assert _payout("AH:-1", "home", 3, 1) == 2.0
+    # 오버 2.75: 3골이면 반승, 2골이면 패
+    assert _payout("OU:2.75", "over", 2, 1) == pytest.approx(1.5)
+    assert _payout("OU:2.75", "over", 1, 1) == 0.0
+    assert _payout("OU:3", "under", 2, 1) == 1.0
+    assert _payout("DNB", "away", 0, 0) == 1.0
+    assert _payout("TTA:0.5", "over", 0, 1) == 2.0
+    assert _payout("CS", "2-1", 2, 1) == 2.0 and _payout("CS", "2-1", 1, 2) == 0.0
+
+
+def test_outcomes_of_a_market_partition_every_score():
+    for m in ("1X2", "OU:2.5", "AH:-1.5", "BTTS", "DC"):
+        total = sum(mk.settle(m, o)[0] + mk.settle(m, o)[1] for o in mk.outcomes(m))
+        if m == "DC":
+            assert (total == 2).all()  # 더블찬스는 결과가 겹친다
+        else:
+            assert np.allclose(total, 1.0)
+
+
 def test_score_matrix_market_probabilities_are_consistent(synthetic_league):
     m = DixonColes().fit(synthetic_league)
     s = m.score_matrix("T2", "T7")
     p1 = market_prob(s, "1X2")
     assert sum(p1.values()) == pytest.approx(1.0)
-    # 핸디캡 -0.5 는 홈 승, +0.5 는 홈 승 + 무 와 같다
     assert market_prob(s, "AH:-0.5")["home"] == pytest.approx(p1["home"])
     assert market_prob(s, "AH:0.5")["home"] == pytest.approx(p1["home"] + p1["draw"])
-    # 1.5 골 핸디캡은 홈이 2골 차 이상으로 이겨야 한다
     n = s.shape[0]
     h, a = np.indices((n, n))
     assert market_prob(s, "AH:-1.5")["home"] == pytest.approx(s[(h - a) >= 2].sum())
-    # 오버 라인이 높을수록 확률은 줄어든다
     overs = [market_prob(s, f"OU:{x}")["over"] for x in (0.5, 1.5, 2.5, 3.5, 4.5)]
     assert overs == sorted(overs, reverse=True)
     assert market_prob(s, "OU:0.5")["over"] == pytest.approx(1 - s[0, 0])
-    assert market_prob(s, "OU:2.75") is None and market_prob(s, "corners:9.5") is None
+    assert market_prob(s, "corners:9.5") is None
 
 
 def test_predict_only_returns_requested_markets(synthetic_league):
