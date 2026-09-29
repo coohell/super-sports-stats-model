@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pandas as pd
 
 from sssm import backtest, history, pipeline
 from sssm.cli import main
@@ -18,7 +19,7 @@ def test_betting_simulation_with_odds(synthetic_league, tmp_path):
     rng = np.random.RandomState(1)
     df = synthetic_league.copy()
     n = len(df)
-    for pre, margin in (("B365", 1.06), ("PS", 1.02), ("PSC", 1.02)):
+    for pre, margin in (("B365", 1.06), ("B365C", 1.05), ("PS", 1.02), ("PSC", 1.02)):
         p = rng.dirichlet([4, 2.5, 3], n)
         df[f"{pre}H"], df[f"{pre}D"], df[f"{pre}A"] = (1 / (p * margin)).T
     path = tmp_path / "odds.csv"
@@ -28,7 +29,24 @@ def test_betting_simulation_with_odds(synthetic_league, tmp_path):
     rep = backtest.run(loaded, start="2023-08-01", min_ev=0.0, min_train=100)
     assert {b["strategy"] for b in rep.betting} == {"sharp+model", "pinnacle only", "model only"}
     assert rep.best_sharp_weight is not None
-    assert "ROI" in rep.to_text()
+    assert {"model", "bet365", "bet365_close", "pinnacle", "pinnacle_close"} <= set(rep.market_loss["1X2"])
+    assert rep.parlays and all(p["bets"] > 0 for p in rep.parlays)
+    assert rep.by_season
+    b = rep.betting[0]
+    assert b["roi_lo"] <= b["roi"] <= b["roi_hi"] and b["clv"] is not None and b["clv_b365"] is not None
+    assert "ROI" in rep.to_text() and "조합" in rep.to_text()
+
+
+def test_from_mirror_maps_to_football_data_columns():
+    results = pd.DataFrame({"match_id": ["a", "b"], "season_code": [2324, 2324], "date": ["2023-08-11", "2023-08-12"],
+                            "home_team": ["Burnley", "Arsenal"], "away_team": ["Man City", "Nott'm Forest"],
+                            "fthg": [0, 2], "ftag": [3, 1]})
+    odds = pd.DataFrame({"match_id": ["a", "b"], "bet365_1x2_home": [8.0, 1.2], "bet365_1x2_home_close": [9.0, 1.18],
+                         "pinnacle_over25_close": [1.6, 1.7], "ladbrokes_1x2_home": [8.5, 1.2]})
+    out = history.from_mirror(results, odds)
+    assert list(out.columns) == ["Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "B365H", "B365CH", "PC>2.5"]
+    assert out["Season"].tolist() == ["2324", "2324"]
+    assert out.loc[0, "B365CH"] == 9.0
 
 
 def test_demo_pipeline_and_cli(tmp_path, capsys):
@@ -64,3 +82,29 @@ def test_download_history_writes_files_and_hides_nothing_on_error(tmp_path):
 
     with pytest.raises(RuntimeError, match="404"):
         history.download("E0", ["9999"], tmp_path, s)
+
+
+def test_download_mirror_writes_football_data_format(tmp_path):
+    files = {
+        "results.csv": "match_id,season,season_code,date,home_team,away_team,fthg,ftag\n"
+                       "a,2023-24,2324,2023-08-11,Burnley,Man City,0,3\n",
+        "results_with_odds.csv": "match_id,bet365_1x2_home,bet365_1x2_draw,bet365_1x2_away,pinnacle_1x2_home\n"
+                                 "a,8.0,5.0,1.4,8.5\n",
+    }
+
+    class Resp:
+        def __init__(self, text):
+            self.status_code, self.text, self.content = 200, text, text.encode()
+
+    class Sess:
+        def get(self, url, timeout=None):
+            return Resp(files[url.rsplit("/", 1)[1]])
+
+    paths = history.download_mirror(["2324"], tmp_path, Sess())
+    assert paths == [tmp_path / "E0_2324.csv"]
+    df = history.load(paths)
+    assert df.loc[0, "home"] == "Burnley" and df.loc[0, "B365A"] == 1.4
+    import pytest
+
+    with pytest.raises(ValueError, match="2425"):
+        history.download_mirror(["2425"], tmp_path, Sess())
