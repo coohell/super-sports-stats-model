@@ -183,6 +183,7 @@ class PickDatabase:
         conn.close()
     
     def save_daily_combo(self, date: str, sport: str, pick_ids: List[int], combo_odds: float, confidence: str):
+        pick_ids = (list(pick_ids) + [None, None, None])[:3]  # 2폴더 조합도 저장 가능하게
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute('''
@@ -252,9 +253,9 @@ class PickDatabase:
             pick_odds=pick_data.get('odds', 0.0),
             confidence=pick_data.get('confidence', ''),
             reasoning=pick_data.get('reason', ''),
-            kelly_fraction=0.0,
-            ev=0.0,
-            edge=0.0,
+            kelly_fraction=pick_data.get('kelly_fraction', 0.0),
+            ev=pick_data.get('ev', 0.0),
+            edge=pick_data.get('edge', 0.0),
             roster_analysis='',
             recent_form='',
             environment='',

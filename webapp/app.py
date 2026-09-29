@@ -150,7 +150,7 @@ with col1:
             if not today_matches:
                 today_matches = matches
             
-            picks = engine.generate_picks(today_matches, min_ev=-10.0, top_n=3)
+            picks = engine.generate_picks(today_matches, top_n=3)
             
             # DB 저장
             saved = []
@@ -163,8 +163,8 @@ with col1:
                     'home_team': pick.home_team,
                     'away_team': pick.away_team,
                     'match_time': pick.match_time,
-                    'pick': max(pick.ensemble_prob, key=pick.ensemble_prob.get),
-                    'odds': getattr(pick, f"{max(pick.ensemble_prob, key=pick.ensemble_prob.get)}_odds"),
+                    'pick': pick.selected,
+                    'odds': pick.selected_odds,
                     'confidence': f"{pick.quality_score:.0f}",
                     'reason': pick.explanation[:500],
                     'model_version': pick.model_version
@@ -211,7 +211,7 @@ if not picks:
                 <div class="quality-score">{demo_pick.quality_score:.0f}</div>
                 <div class="quality-label">품질 점수 / 100</div>
                 <div style="font-size:1.4rem; font-weight:900; color:#4ECDC4; margin:12px 0;">
-                    {max(demo_pick.ensemble_prob, key=demo_pick.ensemble_prob.get).upper()} @ {getattr(demo_pick, f"{max(demo_pick.ensemble_prob, key=demo_pick.ensemble_prob.get)}_odds")}
+                    {demo_pick.selected.upper()} @ {demo_pick.selected_odds}
                 </div>
                 <span class="ev-badge {'ev-positive' if demo_pick.ev_percent > 0 else 'ev-negative'}">
                     EV {demo_pick.ev_percent:+.1f}%
